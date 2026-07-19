@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.*
+!.env.example
+*.log
+coverage/
+.nyc_output/
+storage/
+uploads/*
+!uploads/.gitkeep
+database/backup_*.sql
+.DS_Store
+.idea/
+.vscode/
