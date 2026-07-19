@@ -8,6 +8,7 @@ export function registerTaskRoutes(app, deps) {
     hasPermission,
     isIssueParticipant,
     isProjectMember,
+    isProjectStaffMember,
     isRequesterPersona,
     issueStateForTaskStatus,
     notify,
@@ -119,7 +120,10 @@ export function registerTaskRoutes(app, deps) {
 
     const manage = await canManageProject(req.user, pid);
     if (manage === null) return res.status(404).json({ message: "ไม่พบโครงการ" });
-    if (!manage) return res.status(403).json({ message: "คุณไม่มีสิทธิ์สร้างงานในโครงการนี้" });
+    const isStaffMember = await isProjectStaffMember(pid, req.user.id);
+    if (!manage && !isStaffMember) {
+      return res.status(403).json({ message: "คุณไม่มีสิทธิ์สร้างงานในโครงการนี้" });
+    }
     if (priority && !["low", "medium", "high", "urgent"].includes(priority)) {
       return res.status(400).json({ message: "ความสำคัญไม่ถูกต้อง" });
     }

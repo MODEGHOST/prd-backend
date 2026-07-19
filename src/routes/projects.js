@@ -273,6 +273,8 @@ export function registerProjectRoutes(app, deps) {
     const isMember = hasPermission(req.user, "projects.read_all")
       || members.some((m) => Number(m.user_id) === Number(req.user.id));
     const canEditPlans = await isProjectStaffMember(projectId, req.user.id);
+    const canCreateTasks = hasPermission(req.user, "tasks.create")
+      && await isProjectStaffMember(projectId, req.user.id);
     const [[work]] = await pool.execute(
       `SELECT
          (
@@ -305,6 +307,7 @@ export function registerProjectRoutes(app, deps) {
         canManage: Boolean(canManage),
         isMember,
         canEditPlans,
+        canCreateTasks,
       },
     });
   }));

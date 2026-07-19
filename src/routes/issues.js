@@ -406,8 +406,14 @@ export function registerIssueRoutes(app, deps) {
           && participant,
         canConvertToProject: !isTerminalIssue(issue)
           && !issue.project_id
-          && hasPermission(req.user, "projects.create")
-          && participant,
+          && participant
+          && (
+            hasPermission(req.user, "projects.create")
+            || (
+              hasPermission(req.user, "issues.transition")
+              && Number(issue.assignee_id) === Number(req.user.id)
+            )
+          ),
         canManageMembers: !isTerminalIssue(issue)
           && hasPermission(req.user, "issues.members.manage")
           && participant,
@@ -612,7 +618,7 @@ export function registerIssueRoutes(app, deps) {
     res.json({ message: "มอบหมายผู้รับผิดชอบแล้ว" });
   }));
   
-  app.post("/api/issues/:id/convert-to-project", auth, requirePermission("projects.create"), wrap(async (req, res) => {
+  app.post("/api/issues/:id/convert-to-project", auth, requirePermission("projects.create", "issues.transition"), wrap(async (req, res) => {
     const issue = await getIssueById(req.params.id, req.user.companyId);
     if (!issue) return res.status(404).json({ message: "ไม่พบ Ticket" });
     if (isTerminalIssue(issue)) {
@@ -621,9 +627,17 @@ export function registerIssueRoutes(app, deps) {
     if (issue.project_id) {
       return res.status(409).json({ message: "Ticket นี้เชื่อมกับโครงการแล้ว" });
     }
-    const canConvert = hasPermission(req.user, "issues.manage_all")
-      || await isIssueParticipant(req.params.id, req.user.id);
-    if (!canConvert) return res.status(403).json({ message: "คุณไม่ได้อยู่ในทีมของ Ticket นี้" });
+    const participant = await isIssueParticipant(req.params.id, req.user.id);
+    const canConvert = participant && (
+      hasPermission(req.user, "projects.create")
+      || (
+        hasPermission(req.user, "issues.transition")
+        && Number(issue.assignee_id) === Number(req.user.id)
+      )
+    );
+    if (!canConvert) {
+      return res.status(403).json({ message: "เฉพาะผู้รับผิดชอบ Ticket หรือผู้มีสิทธิ์สร้างโครงการเท่านั้น" });
+    }
   
     const {
       name,

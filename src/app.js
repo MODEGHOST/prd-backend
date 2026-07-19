@@ -291,6 +291,7 @@ export function createApplication(options = {}) {
     hasPermission,
     isIssueParticipant,
     isProjectMember,
+    isProjectStaffMember,
     isRequesterPersona,
     issueStateForTaskStatus,
     notify,
