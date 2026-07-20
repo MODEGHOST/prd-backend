@@ -59,6 +59,18 @@ export function loadConfig(env = process.env) {
     throw new Error("SEED_DEMO_DATA cannot be enabled in production");
   }
 
+  const cookieSameSiteRaw = String(env.COOKIE_SAME_SITE || (production ? "lax" : "lax"))
+    .toLowerCase();
+  if (!["lax", "strict", "none"].includes(cookieSameSiteRaw)) {
+    throw new Error("COOKIE_SAME_SITE must be lax, strict, or none");
+  }
+  const cookieSecure = env.COOKIE_SECURE == null
+    ? production || cookieSameSiteRaw === "none"
+    : env.COOKIE_SECURE === "1";
+  if (cookieSameSiteRaw === "none" && !cookieSecure) {
+    throw new Error("COOKIE_SAME_SITE=none requires COOKIE_SECURE=1");
+  }
+
   return Object.freeze({
     nodeEnv,
     production,
@@ -73,6 +85,11 @@ export function loadConfig(env = process.env) {
     metricsToken: env.METRICS_TOKEN || "",
     trustProxy: env.TRUST_PROXY === "1" ? 1 : false,
     seedDemoData,
+    cookie: Object.freeze({
+      sameSite: cookieSameSiteRaw,
+      secure: cookieSecure,
+      domain: env.COOKIE_DOMAIN || "",
+    }),
     authTokenTtl: (() => {
       const value = env.AUTH_TOKEN_TTL || "8h";
       if (!/^\d+(?:ms|s|m|h|d|w|y)$/.test(value)) {
@@ -82,10 +99,10 @@ export function loadConfig(env = process.env) {
     })(),
     attachments: Object.freeze({
       directory: env.ATTACHMENT_STORAGE_DIR || "./storage/issue-attachments",
-      maxFiles: positiveInteger(env.ATTACHMENT_MAX_FILES, 5, "ATTACHMENT_MAX_FILES", 20),
+      maxFiles: positiveInteger(env.ATTACHMENT_MAX_FILES, 15, "ATTACHMENT_MAX_FILES", 30),
       maxBytes: positiveInteger(
         env.ATTACHMENT_MAX_BYTES,
-        10 * 1024 * 1024,
+        25 * 1024 * 1024,
         "ATTACHMENT_MAX_BYTES",
         50 * 1024 * 1024,
       ),

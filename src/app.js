@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -19,6 +20,10 @@ import {
 } from "./core/authz.js";
 import { getRuntimeMetrics, logger, requestContext } from "./core/logger.js";
 import { enqueueOutbox } from "./core/outbox.js";
+import {
+  clearSessionCookie,
+  setSessionCookie,
+} from "./core/session-cookie.js";
 import { wrap } from "./middleware/async-handler.js";
 import { createAuth } from "./middleware/auth.js";
 import { createAuthRateLimit } from "./middleware/auth-rate-limit.js";
@@ -72,6 +77,7 @@ export function createApplication(options = {}) {
     cors: {
       origin: [config.frontendUrl, "http://127.0.0.1:5173"],
       methods: ["GET", "POST", "PATCH", "PUT", "DELETE"],
+      credentials: true,
     },
     transports: ["polling", "websocket"],
   });
@@ -81,6 +87,7 @@ export function createApplication(options = {}) {
     origin: [config.frontendUrl, "http://127.0.0.1:5173"],
     credentials: true,
   }));
+  app.use(cookieParser());
   app.use(express.json({ limit: "2mb" }));
   app.use(requestContext);
 
@@ -90,12 +97,16 @@ export function createApplication(options = {}) {
     requireCompanyManager,
     requirePermission,
     sign,
+    invalidateSessionCache,
   } = createAuth({
     pool,
     jwtSecret: config.jwtSecret,
     authTokenTtl: config.authTokenTtl,
   });
-  const { authRateCleanupTimer, authRateLimit } = createAuthRateLimit();
+  const { authRateCleanupTimer, authRateLimit, closeAuthRateLimit } = createAuthRateLimit({
+    redisUrl: config.redisUrl,
+    logger,
+  });
   const sendEmail = createEmailService({
     config,
     emailFrom: config.emailFrom,
@@ -166,16 +177,20 @@ export function createApplication(options = {}) {
     auth,
     authRateLimit,
     bcrypt,
+    clearSessionCookie,
+    config,
     createHash,
     createOneTimeToken,
     enqueueOutbox,
     frontendUrl: config.frontendUrl,
+    invalidateSessionCache,
     jwt,
     jwtSecret: config.jwtSecret,
     loadSession,
     notifyLater,
     pool,
     requirePermission,
+    setSessionCookie,
     sign,
     wrap,
   });
@@ -187,6 +202,7 @@ export function createApplication(options = {}) {
     canManageMembership,
     companyRoleRank,
     hasPermission,
+    invalidateSessionCache,
     isHierarchyPermission,
     isRequesterPersona,
     paginatedJson,
@@ -332,6 +348,7 @@ export function createApplication(options = {}) {
   return {
     app,
     authRateCleanupTimer,
+    closeAuthRateLimit,
     drainBackgroundJobs,
     getReady,
     io,

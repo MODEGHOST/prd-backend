@@ -8,6 +8,7 @@ import { configureRealtimeScale } from "./core/realtime.js";
 const {
   app,
   authRateCleanupTimer,
+  closeAuthRateLimit,
   drainBackgroundJobs,
   io,
   pool,
@@ -115,6 +116,7 @@ async function shutdown(signal) {
       await drainBackgroundJobs();
       await stopOutbox();
       await closeRealtime();
+      await closeAuthRateLimit?.();
       await pool.end();
     } catch (closeError) {
       logger.error("server.resource_close_failed", closeError);

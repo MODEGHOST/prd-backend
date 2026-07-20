@@ -1,3 +1,5 @@
+import { readTokenFromSocket } from "../core/session-cookie.js";
+
 export function registerSocketHandlers({
   io,
   loadSession,
@@ -6,7 +8,10 @@ export function registerSocketHandlers({
   canViewIssue,
 }) {
   io.on("connection", (socket) => {
+    const resolveToken = (payloadToken) => payloadToken || readTokenFromSocket(socket);
+
     const sessionForSocket = async (token) => {
+      if (!token) throw new Error("missing token");
       const user = await loadSession(token);
       if (socket.data.userId
           && (Number(socket.data.userId) !== Number(user.id)
@@ -18,8 +23,9 @@ export function registerSocketHandlers({
       return user;
     };
 
-    socket.on("join", async (token) => {
+    socket.on("join", async (payload) => {
       try {
+        const token = typeof payload === "string" ? payload : resolveToken(payload?.token);
         const user = await sessionForSocket(token);
         socket.join(`company:${user.companyId}:user:${user.id}`);
       } catch {
@@ -29,7 +35,7 @@ export function registerSocketHandlers({
 
     socket.on("joinProject", async (payload) => {
       try {
-        const token = payload?.token;
+        const token = resolveToken(payload?.token);
         const projectId = Number(payload?.projectId);
         if (!token || !Number.isInteger(projectId) || projectId <= 0) {
           socket.emit("projectError", { message: "ข้อมูลเข้าร่วมโครงการไม่ถูกต้อง" });
@@ -61,7 +67,7 @@ export function registerSocketHandlers({
 
     socket.on("joinIssue", async (payload) => {
       try {
-        const token = payload?.token;
+        const token = resolveToken(payload?.token);
         const issueId = Number(payload?.issueId);
         if (!token || !Number.isInteger(issueId) || issueId <= 0) {
           socket.emit("issueError", { message: "ข้อมูลเข้าร่วม Ticket ไม่ถูกต้อง" });

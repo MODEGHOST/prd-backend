@@ -59,3 +59,16 @@ test("unverified accounts cannot receive or reuse an authenticated session", () 
     /UPDATE users SET status = 'active' WHERE id = \? AND status = 'pending'/,
   );
 });
+
+test("logout and membership suspension revoke outstanding sessions", () => {
+  assert.match(publicAuth, /app\.post\("\/api\/auth\/logout"/);
+  assert.match(publicAuth, /token_version = token_version \+ 1/);
+  assert.match(publicAuth, /setSessionCookie/);
+  assert.match(publicAuth, /clearSessionCookie/);
+  assert.match(authMiddleware, /algorithms:\s*\["HS256"\]/);
+  assert.match(authMiddleware, /readTokenFromRequest/);
+  assert.match(
+    memberships,
+    /status === "suspended" \|\| status === "rejected"[\s\S]*token_version = token_version \+ 1/,
+  );
+});

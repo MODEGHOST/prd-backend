@@ -3,9 +3,30 @@ import {
   verificationEmail,
 } from "../services/email-templates.js";
 import { passwordPolicyErrors } from "../core/password-policy.js";
+import { JWT_SIGN_OPTIONS } from "../middleware/auth.js";
 
 export function registerPublicAuthRoutes(app, deps) {
-  const { audit, auth, authRateLimit, bcrypt, createHash, createOneTimeToken, enqueueOutbox, frontendUrl, jwt, jwtSecret, loadSession, notifyLater, pool, sign, wrap } = deps;
+  const {
+    audit,
+    auth,
+    authRateLimit,
+    bcrypt,
+    clearSessionCookie,
+    config,
+    createHash,
+    createOneTimeToken,
+    enqueueOutbox,
+    frontendUrl,
+    invalidateSessionCache,
+    jwt,
+    jwtSecret,
+    loadSession,
+    notifyLater,
+    pool,
+    setSessionCookie,
+    sign,
+    wrap,
+  } = deps;
 
   app.get("/api/companies/public", authRateLimit({ limit: 60 }), wrap(async (_req, res) => {
     const [rows] = await pool.execute(
@@ -369,6 +390,7 @@ export function registerPublicAuthRoutes(app, deps) {
         [record.user_id],
       );
       await conn.commit();
+      invalidateSessionCache?.();
       res.json({ message: "ตั้งรหัสผ่านใหม่แล้ว" });
     } catch (error) {
       await conn.rollback();
@@ -415,9 +437,30 @@ export function registerPublicAuthRoutes(app, deps) {
     const session = await loadSession(jwt.sign(
       { id: user.id, activeCompanyId: membership.company_id, tokenVersion: user.token_version },
       jwtSecret,
-      { expiresIn: "2m" },
+      { ...JWT_SIGN_OPTIONS, expiresIn: "2m" },
     ));
-    res.json({ token: sign(session), user: session });
+    const token = sign(session);
+    setSessionCookie(res, token, config);
+    const [companies] = await pool.execute(
+      `SELECT c.id, c.name, c.parent_id, cm.employee_code, cm.status
+       FROM company_memberships cm
+       JOIN companies c ON c.id = cm.company_id
+       WHERE cm.user_id = ? AND cm.status = 'active' AND c.is_active = TRUE
+       ORDER BY c.name`,
+      [session.id],
+    );
+    res.json({ token, user: session, companies });
+  }));
+
+  app.post("/api/auth/logout", auth, wrap(async (req, res) => {
+    await pool.execute(
+      "UPDATE users SET token_version = token_version + 1 WHERE id = ?",
+      [req.user.id],
+    );
+    invalidateSessionCache?.();
+    clearSessionCookie(res, config);
+    await audit(req, "auth.logout", "user", req.user.id);
+    res.json({ message: "ออกจากระบบแล้ว" });
   }));
 
   app.get("/api/auth/me", auth, wrap(async (req, res) => {
@@ -440,14 +483,16 @@ export function registerPublicAuthRoutes(app, deps) {
     const switched = await loadSession(jwt.sign(
       { id: req.user.id, activeCompanyId: companyId, tokenVersion: req.user.tokenVersion },
       jwtSecret,
-      { expiresIn: "2m" },
+      { ...JWT_SIGN_OPTIONS, expiresIn: "2m" },
     ));
+    const token = sign(switched);
+    setSessionCookie(res, token, config);
     await audit(
       { user: switched, ip: req.ip },
       "auth.company_switched",
       "company",
       companyId,
     );
-    res.json({ token: sign(switched), user: switched });
+    res.json({ token, user: switched });
   }));
 }

@@ -98,42 +98,50 @@ export function registerProjectRoutes(app, deps) {
               LEFT(p.description, 280) AS description,
               creator.name creator_name,
               owner.name owner_name,
-              (
-                SELECT COUNT(*)
-                FROM project_members pm
-                JOIN company_memberships cm
-                  ON cm.company_id = p.company_id
-                 AND cm.user_id = pm.user_id
-                 AND cm.status = 'active'
-                WHERE pm.project_id = p.id
-              ) member_count,
-              (
-                SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id
-              ) task_count,
-              (
-                SELECT COUNT(*) FROM tasks t
-                WHERE t.project_id = p.id AND t.status = 'done'
-              ) done_count,
-              (
-                SELECT COUNT(*) FROM tasks t
-                WHERE t.project_id = p.id AND t.issue_id IS NULL
-              ) + (
-                SELECT COUNT(*) FROM issues i WHERE i.project_id = p.id
-              ) work_total,
-              (
-                SELECT COUNT(*) FROM tasks t
-                WHERE t.project_id = p.id AND t.issue_id IS NULL AND t.status = 'done'
-              ) + (
-                SELECT COUNT(*) FROM issues i
-                WHERE i.project_id = p.id AND i.status = 'closed'
-              ) work_done
+              COALESCE(member_stats.member_count, 0) member_count,
+              COALESCE(task_stats.task_count, 0) task_count,
+              COALESCE(task_stats.done_count, 0) done_count,
+              COALESCE(task_stats.standalone_total, 0)
+                + COALESCE(issue_stats.issue_count, 0) work_total,
+              COALESCE(task_stats.standalone_done, 0)
+                + COALESCE(issue_stats.issue_closed, 0) work_done
        FROM projects p
        JOIN users owner ON owner.id = p.owner_id
        JOIN users creator ON creator.id = p.created_by
+       LEFT JOIN (
+         SELECT pm.project_id, COUNT(*) member_count
+         FROM project_members pm
+         JOIN projects scoped ON scoped.id = pm.project_id
+         JOIN company_memberships cm
+           ON cm.company_id = scoped.company_id
+          AND cm.user_id = pm.user_id
+          AND cm.status = 'active'
+         WHERE scoped.company_id = ?
+         GROUP BY pm.project_id
+       ) member_stats ON member_stats.project_id = p.id
+       LEFT JOIN (
+         SELECT t.project_id,
+                COUNT(*) task_count,
+                SUM(t.status = 'done') done_count,
+                SUM(t.issue_id IS NULL) standalone_total,
+                SUM(t.issue_id IS NULL AND t.status = 'done') standalone_done
+         FROM tasks t
+         JOIN projects scoped ON scoped.id = t.project_id
+         WHERE scoped.company_id = ?
+         GROUP BY t.project_id
+       ) task_stats ON task_stats.project_id = p.id
+       LEFT JOIN (
+         SELECT i.project_id,
+                COUNT(*) issue_count,
+                SUM(i.status = 'closed') issue_closed
+         FROM issues i
+         WHERE i.company_id = ? AND i.project_id IS NOT NULL
+         GROUP BY i.project_id
+       ) issue_stats ON issue_stats.project_id = p.id
        ${accessWhere}
        ORDER BY p.created_at DESC
        LIMIT ${pagination.limit} OFFSET ${pagination.offset}`,
-      accessParams,
+      [req.user.companyId, req.user.companyId, req.user.companyId, ...accessParams],
     );
     paginatedJson(
       res,
@@ -597,13 +605,7 @@ export function registerProjectRoutes(app, deps) {
     if (!project.start_date || !project.end_date) {
       return res.status(400).json({ message: "กรุณากำหนดวันเริ่มและวันสิ้นสุดของโครงการก่อน" });
     }
-    const projectStart = toDateOnly(project.start_date);
-    const projectEnd = toDateOnly(project.end_date);
-    if (weekStart < projectStart || weekEnd > projectEnd) {
-      return res.status(400).json({
-        message: `ช่วงแผนต้องอยู่ภายในวันที่โครงการ ${projectStart} ถึง ${projectEnd}`,
-      });
-    }
+    // อนุญาตให้ช่วงงานเกินวันสิ้นสุดโครงการได้ (กรณีงานล่าช้า) — ฝั่ง UI จะทำเครื่องหมายให้เห็นชัด
   
     let assignee = null;
     if (assigneeId !== undefined && assigneeId !== null && assigneeId !== "") {
@@ -691,13 +693,7 @@ export function registerProjectRoutes(app, deps) {
     if (!project.start_date || !project.end_date) {
       return res.status(400).json({ message: "กรุณากำหนดวันเริ่มและวันสิ้นสุดของโครงการก่อน" });
     }
-    const projectStart = toDateOnly(project.start_date);
-    const projectEnd = toDateOnly(project.end_date);
-    if (nextStart < projectStart || nextEnd > projectEnd) {
-      return res.status(400).json({
-        message: `ช่วงแผนต้องอยู่ภายในวันที่โครงการ ${projectStart} ถึง ${projectEnd}`,
-      });
-    }
+    // อนุญาตให้ช่วงงานเกินวันสิ้นสุดโครงการได้ (กรณีงานล่าช้า)
     if (req.body.status !== undefined) {
       if (!["planned", "in_progress", "done"].includes(req.body.status)) {
         return res.status(400).json({ message: "สถานะแผนไม่ถูกต้อง" });

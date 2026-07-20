@@ -25,6 +25,8 @@ test("attachment storage is private, randomized, tenant checked, and bounded", (
   assert.match(migration, /CREATE TABLE IF NOT EXISTS issue_attachments/);
   assert.match(baseline, /CREATE TABLE IF NOT EXISTS issue_attachments/);
   assert.match(attachments, /path\.basename/);
+  assert.match(attachments, /sniffMimeType/);
+  assert.match(attachments, /sniffed && sniffed !== file\.mimetype/);
   assert.match(issues, /randomBytes\(24\)\.toString\("hex"\)/);
   assert.match(issues, /company_id = \?/);
   assert.match(issues, /canViewIssue/);

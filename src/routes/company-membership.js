@@ -6,6 +6,7 @@ export function registerCompanyMembershipRoutes(app, deps) {
     canManageMembership,
     companyRoleRank,
     hasPermission,
+    invalidateSessionCache,
     isHierarchyPermission,
     isRequesterPersona,
     paginatedJson,
@@ -224,12 +225,21 @@ export function registerCompanyMembershipRoutes(app, deps) {
          WHERE id = ? AND company_id = ?`,
         [status, req.user.id, status, req.params.membershipId, req.user.companyId],
       );
+      if (status === "suspended" || status === "rejected") {
+        await connection.execute(
+          "UPDATE users SET token_version = token_version + 1 WHERE id = ?",
+          [target.user_id],
+        );
+      }
       await connection.commit();
     } catch (error) {
       await connection.rollback();
       throw error;
     } finally {
       connection.release();
+    }
+    if (status === "suspended" || status === "rejected") {
+      invalidateSessionCache?.();
     }
     await audit(req, `membership.${status}`, "membership", req.params.membershipId);
     res.json({ message: "อัปเดตสถานะสมาชิกแล้ว" });

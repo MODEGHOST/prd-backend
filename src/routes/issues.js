@@ -338,6 +338,7 @@ export function registerIssueRoutes(app, deps) {
         project_code: issue.project_code,
         project_name: issue.project_name,
         system_component: issue.system_component,
+        assignee_name: issue.assignee_name || null,
         estimated_completion_at: issue.estimated_completion_at || projectEndEstimate,
         created_at: issue.created_at,
         updated_at: issue.updated_at,

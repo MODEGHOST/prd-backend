@@ -1,8 +1,48 @@
+import { createHash } from "node:crypto";
 import jwt from "jsonwebtoken";
 import { compatibilityRole, hasPermission, isCompanyManager } from "../core/authz.js";
+import { readTokenFromRequest } from "../core/session-cookie.js";
 import { wrap } from "./async-handler.js";
 
+export const JWT_SIGN_OPTIONS = Object.freeze({ algorithm: "HS256" });
+export const JWT_VERIFY_OPTIONS = Object.freeze({ algorithms: ["HS256"] });
+
+const SESSION_CACHE_TTL_MS = 5_000;
+const SESSION_CACHE_MAX = 500;
+
 export function createAuth({ pool, jwtSecret, authTokenTtl }) {
+  const sessionCache = new Map();
+
+  function cacheKey(token) {
+    return createHash("sha256").update(token).digest("hex");
+  }
+
+  function readCachedSession(token) {
+    const key = cacheKey(token);
+    const hit = sessionCache.get(key);
+    if (!hit) return null;
+    if (hit.expiresAt <= Date.now()) {
+      sessionCache.delete(key);
+      return null;
+    }
+    return hit.session;
+  }
+
+  function writeCachedSession(token, session) {
+    if (sessionCache.size >= SESSION_CACHE_MAX) {
+      const oldest = sessionCache.keys().next().value;
+      if (oldest) sessionCache.delete(oldest);
+    }
+    sessionCache.set(cacheKey(token), {
+      session,
+      expiresAt: Date.now() + SESSION_CACHE_TTL_MS,
+    });
+  }
+
+  function invalidateSessionCache() {
+    sessionCache.clear();
+  }
+
   function sign(user) {
     return jwt.sign(
       {
@@ -11,12 +51,15 @@ export function createAuth({ pool, jwtSecret, authTokenTtl }) {
         tokenVersion: Number(user.tokenVersion || 0),
       },
       jwtSecret,
-      { expiresIn: authTokenTtl },
+      { ...JWT_SIGN_OPTIONS, expiresIn: authTokenTtl },
     );
   }
 
   async function loadSession(token) {
-    const claims = jwt.verify(token, jwtSecret);
+    const cached = readCachedSession(token);
+    if (cached) return cached;
+
+    const claims = jwt.verify(token, jwtSecret, JWT_VERIFY_OPTIONS);
     const [[account]] = await pool.execute(
       `SELECT id, name, first_name, last_name, email, role legacy_role, department,
               status, email_verified_at, token_version
@@ -75,7 +118,7 @@ export function createAuth({ pool, jwtSecret, authTokenTtl }) {
        WHERE mr.membership_id = ?`,
       [membership.membership_id],
     );
-    return {
+    const session = {
       id: account.id,
       name: account.name,
       firstName: account.first_name,
@@ -92,10 +135,12 @@ export function createAuth({ pool, jwtSecret, authTokenTtl }) {
       permissions: permissionRows.map((row) => row.code),
       role: compatibilityRole(roleNames),
     };
+    writeCachedSession(token, session);
+    return session;
   }
 
   const auth = wrap(async (req, res, next) => {
-    const token = req.headers.authorization?.replace(/^Bearer\s+/i, "");
+    const token = readTokenFromRequest(req);
     if (!token) return res.status(401).json({ message: "กรุณาเข้าสู่ระบบ" });
     try {
       req.user = await loadSession(token);
@@ -118,5 +163,12 @@ export function createAuth({ pool, jwtSecret, authTokenTtl }) {
         message: "รายการนี้สำหรับ Group Admin หรือ Company Admin เท่านั้น",
       });
 
-  return { auth, loadSession, requireCompanyManager, requirePermission, sign };
+  return {
+    auth,
+    invalidateSessionCache,
+    loadSession,
+    requireCompanyManager,
+    requirePermission,
+    sign,
+  };
 }

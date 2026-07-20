@@ -59,6 +59,43 @@ export function registerTaskRoutes(app, deps) {
       filter += " AND t.status = ?";
       values.push(req.query.status);
     }
+    if (req.query.priority) {
+      if (!["low", "medium", "high", "urgent"].includes(req.query.priority)) {
+        return res.status(400).json({ message: "ความสำคัญไม่ถูกต้อง" });
+      }
+      filter += " AND t.priority = ?";
+      values.push(req.query.priority);
+    }
+    if (req.query.assigneeId) {
+      const assigneeId = Number(req.query.assigneeId);
+      if (!Number.isInteger(assigneeId) || assigneeId <= 0) {
+        return res.status(400).json({ message: "assigneeId ไม่ถูกต้อง" });
+      }
+      filter += " AND t.assignee_id = ?";
+      values.push(assigneeId);
+    }
+    const query = String(req.query.q || "").trim();
+    if (query) {
+      filter += " AND (t.title LIKE ? OR t.description LIKE ?)";
+      values.push(`%${query}%`, `%${query}%`);
+    }
+    const dateFrom = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.dateFrom || ""))
+      ? req.query.dateFrom
+      : null;
+    const dateTo = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.dateTo || ""))
+      ? req.query.dateTo
+      : null;
+    if (dateFrom) {
+      filter += " AND COALESCE(t.due_date, DATE(t.updated_at)) >= ?";
+      values.push(dateFrom);
+    }
+    if (dateTo) {
+      filter += " AND COALESCE(t.due_date, DATE(t.updated_at)) <= ?";
+      values.push(dateTo);
+    }
+    if (req.query.overdue === "true") {
+      filter += " AND t.due_date IS NOT NULL AND t.due_date < CURDATE() AND t.status <> 'done'";
+    }
 
     const pagination = parsePagination(req, { defaultLimit: 200, maxLimit: 500 });
     const [[{ total }]] = await pool.execute(

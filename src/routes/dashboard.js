@@ -303,34 +303,36 @@ export function registerDashboardRoutes(app, deps) {
                 ) issue_participant,
                 COALESCE(p.end_date, p.start_date, DATE(p.created_at)) item_date,
                 p.created_at updated_at,
-                (
-                  SELECT COUNT(*) FROM tasks project_task
-                  WHERE project_task.project_id = p.id AND project_task.issue_id IS NULL
-                ) + (
-                  SELECT COUNT(*) FROM issues project_issue
-                  WHERE project_issue.project_id = p.id
-                ) work_total,
-                (
-                  SELECT COUNT(*) FROM tasks project_task
-                  WHERE project_task.project_id = p.id
-                    AND project_task.issue_id IS NULL AND project_task.status = 'done'
-                ) + (
-                  SELECT COUNT(*) FROM issues project_issue
-                  WHERE project_issue.project_id = p.id AND project_issue.status = 'closed'
-                ) work_done,
-                (
-                  SELECT COUNT(*) FROM tasks project_task
-                  WHERE project_task.project_id = p.id
-                    AND project_task.issue_id IS NULL AND project_task.status <> 'done'
-                ) + (
-                  SELECT COUNT(*) FROM issues project_issue
-                  WHERE project_issue.project_id = p.id AND project_issue.status <> 'closed'
-                ) remaining
+                COALESCE(task_stats.standalone_total, 0)
+                  + COALESCE(issue_stats.issue_count, 0) work_total,
+                COALESCE(task_stats.standalone_done, 0)
+                  + COALESCE(issue_stats.issue_closed, 0) work_done,
+                COALESCE(task_stats.standalone_open, 0)
+                  + COALESCE(issue_stats.issue_open, 0) remaining
          FROM projects p
          JOIN users owner ON owner.id = p.owner_id
+         LEFT JOIN (
+           SELECT t.project_id,
+                  SUM(t.issue_id IS NULL) standalone_total,
+                  SUM(t.issue_id IS NULL AND t.status = 'done') standalone_done,
+                  SUM(t.issue_id IS NULL AND t.status <> 'done') standalone_open
+           FROM tasks t
+           JOIN projects scoped ON scoped.id = t.project_id
+           WHERE scoped.company_id = ?
+           GROUP BY t.project_id
+         ) task_stats ON task_stats.project_id = p.id
+         LEFT JOIN (
+           SELECT i.project_id,
+                  COUNT(*) issue_count,
+                  SUM(i.status = 'closed') issue_closed,
+                  SUM(i.status <> 'closed') issue_open
+           FROM issues i
+           WHERE i.company_id = ? AND i.project_id IS NOT NULL
+           GROUP BY i.project_id
+         ) issue_stats ON issue_stats.project_id = p.id
          WHERE ${where}`,
       );
-      dataValues.push(req.user.id, ...projectValues);
+      dataValues.push(req.user.id, req.user.companyId, req.user.companyId, ...projectValues);
     }
     if (includeTickets) {
       const where = ticketWhere.join(" AND ");
