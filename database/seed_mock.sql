@@ -20,12 +20,12 @@ TRUNCATE TABLE users;
 SET FOREIGN_KEY_CHECKS = 1;
 
 -- ผู้ใช้ (password = Password123!)
-INSERT INTO users (id, name, email, password_hash, role, department) VALUES
-(1, 'ผู้ดูแลระบบ', 'admin@projecthub.local', '$2b$10$V4jdn9p6oG21IYaGagOenOrKqN/hmI6zY6UCockAQDipdaGblDHEG', 'admin', 'IT'),
-(2, 'สมชาย นักพัฒนา', 'developer@projecthub.local', '$2b$10$V4jdn9p6oG21IYaGagOenOrKqN/hmI6zY6UCockAQDipdaGblDHEG', 'member', 'Development'),
-(3, 'สุดา ทดสอบระบบ', 'qa@projecthub.local', '$2b$10$V4jdn9p6oG21IYaGagOenOrKqN/hmI6zY6UCockAQDipdaGblDHEG', 'member', 'QA'),
-(4, 'วิภา พนักงานทั่วไป', 'requester@projecthub.local', '$2b$10$V4jdn9p6oG21IYaGagOenOrKqN/hmI6zY6UCockAQDipdaGblDHEG', 'requester', 'Operations'),
-(5, 'นภา ฝ่ายขาย', 'sales@projecthub.local', '$2b$10$V4jdn9p6oG21IYaGagOenOrKqN/hmI6zY6UCockAQDipdaGblDHEG', 'requester', 'Sales');
+INSERT INTO users (id, name, email, username, password_hash, role, department) VALUES
+(1, 'ผู้ดูแลระบบ', 'admin@projecthub.local', 'admin', '$2b$10$V4jdn9p6oG21IYaGagOenOrKqN/hmI6zY6UCockAQDipdaGblDHEG', 'admin', 'IT'),
+(2, 'สมชาย นักพัฒนา', 'developer@projecthub.local', 'developer', '$2b$10$V4jdn9p6oG21IYaGagOenOrKqN/hmI6zY6UCockAQDipdaGblDHEG', 'member', 'Development'),
+(3, 'สุดา ทดสอบระบบ', 'qa@projecthub.local', 'qa', '$2b$10$V4jdn9p6oG21IYaGagOenOrKqN/hmI6zY6UCockAQDipdaGblDHEG', 'member', 'QA'),
+(4, 'วิภา พนักงานทั่วไป', 'requester@projecthub.local', 'requester', '$2b$10$V4jdn9p6oG21IYaGagOenOrKqN/hmI6zY6UCockAQDipdaGblDHEG', 'requester', 'Operations'),
+(5, 'นภา ฝ่ายขาย', 'sales@projecthub.local', 'sales', '$2b$10$V4jdn9p6oG21IYaGagOenOrKqN/hmI6zY6UCockAQDipdaGblDHEG', 'requester', 'Sales');
 
 -- โครงการ (owner_id = main owner, created_by = creator)
 INSERT INTO projects (id, name, code, description, prd, status, start_date, end_date, owner_id, approved_by, created_by, budget, currency) VALUES

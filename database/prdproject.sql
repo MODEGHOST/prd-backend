@@ -7,6 +7,8 @@ CREATE TABLE IF NOT EXISTS users (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(120) NOT NULL,
   email VARCHAR(190) NOT NULL UNIQUE,
+  username VARCHAR(50) NOT NULL UNIQUE,
+  telegram_id VARCHAR(64) NULL UNIQUE,
   password_hash VARCHAR(255) NOT NULL,
   role ENUM('admin', 'member', 'requester') NOT NULL DEFAULT 'requester',
   department VARCHAR(120),

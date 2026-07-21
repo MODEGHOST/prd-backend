@@ -63,6 +63,7 @@ export function registerIssueRoutes(app, deps) {
     ensureLinkedIssueTask,
     ensureProjectMember,
     getIssueById,
+    getTicketCompletionBlockReason,
     hasPermission,
     io,
     isIssueParticipant,
@@ -1118,6 +1119,11 @@ export function registerIssueRoutes(app, deps) {
       || await isIssueParticipant(req.params.id, req.user.id);
     if (!participant) return res.status(403).json({ message: "คุณไม่ได้อยู่ในทีมของ Ticket นี้" });
     if (!issue.assignee_id) return res.status(409).json({ message: "ต้องมีผู้รับผิดชอบก่อนย้ายงาน" });
+
+    if (boardStatus === "done") {
+      const blockReason = await getTicketCompletionBlockReason(pool, issue);
+      if (blockReason) return res.status(409).json({ message: blockReason });
+    }
   
     const next = issueStateForTaskStatus(boardStatus);
     const labels = {
@@ -1184,6 +1190,10 @@ export function registerIssueRoutes(app, deps) {
     }
     if (req.body.status === "closed" && !["accepted", "in_progress"].includes(issue.status)) {
       return res.status(409).json({ message: "ไม่สามารถปิด Ticket จากสถานะปัจจุบันได้" });
+    }
+    if (req.body.status === "closed") {
+      const blockReason = await getTicketCompletionBlockReason(pool, issue);
+      if (blockReason) return res.status(409).json({ message: blockReason });
     }
   
     const isStarting = req.body.status === "in_progress";

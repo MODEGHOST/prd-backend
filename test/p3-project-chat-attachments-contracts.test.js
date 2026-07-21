@@ -39,6 +39,7 @@ test("project messages accept JSON or multipart body-or-files transactionally", 
   assert.match(route, /unlink\(target\)/);
   assert.match(route, /attachments,/);
   assert.match(route, /body \|\| "แนบไฟล์"/);
+  assert.match(route, /งานทั้งหมดเสร็จสิ้นแล้ว ไม่สามารถส่งข้อความในแชททีมได้อีก/);
 });
 
 test("project message reads and socket payloads include attachment arrays", () => {

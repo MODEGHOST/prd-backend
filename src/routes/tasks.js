@@ -4,7 +4,9 @@ export function registerTaskRoutes(app, deps) {
     auth,
     canAccessProject,
     canManageProject,
+    countIncompleteSiblingTasks,
     getIssueById,
+    getProjectBoardGate,
     hasPermission,
     isIssueParticipant,
     isProjectMember,
@@ -161,6 +163,10 @@ export function registerTaskRoutes(app, deps) {
     if (!manage && !isStaffMember) {
       return res.status(403).json({ message: "คุณไม่มีสิทธิ์สร้างงานในโครงการนี้" });
     }
+    const boardGate = await getProjectBoardGate(pool, pid);
+    if (boardGate.boardLocked) {
+      return res.status(409).json({ message: "งานทั้งหมดเสร็จสิ้นแล้ว ไม่สามารถเพิ่มงานได้อีก" });
+    }
     if (priority && !["low", "medium", "high", "urgent"].includes(priority)) {
       return res.status(400).json({ message: "ความสำคัญไม่ถูกต้อง" });
     }
@@ -255,10 +261,14 @@ export function registerTaskRoutes(app, deps) {
       return res.status(403).json({ message: "คุณไม่มีสิทธิ์อัปเดตงานนี้" });
     }
 
+    const boardGate = await getProjectBoardGate(pool, task.project_id);
     const detailFields = ["title", "description", "priority", "difficulty", "assigneeId", "startDate", "dueDate"];
     const updatesDetails = detailFields.some((field) => Object.hasOwn(req.body, field));
     let detailUpdateValues = null;
     if (updatesDetails) {
+      if (boardGate.boardLocked) {
+        return res.status(409).json({ message: "งานทั้งหมดเสร็จสิ้นแล้ว ไม่สามารถแก้ไขรายละเอียดงานได้อีก" });
+      }
       const canEditDetails = Boolean(manage) || isAssignee || canMoveLinkedIssue;
       if (!canEditDetails) {
         return res.status(403).json({ message: "คุณไม่มีสิทธิ์แก้ไขรายละเอียดงานนี้" });
@@ -329,6 +339,23 @@ export function registerTaskRoutes(app, deps) {
       }
       if (task.issue_id && task.issue_status === "closed" && status !== "done") {
         return res.status(409).json({ message: "Ticket ที่เชื่อมกับงานนี้ปิดแล้วและย้ายไม่ได้" });
+      }
+      if (status !== task.status) {
+        if (boardGate.boardLocked) {
+          return res.status(409).json({ message: "งานทั้งหมดเสร็จสิ้นแล้ว ไม่สามารถย้ายงานได้อีก" });
+        }
+        if (task.issue_id) {
+          const incompleteSiblings = await countIncompleteSiblingTasks(
+            pool,
+            task.project_id,
+            task.id,
+          );
+          if (incompleteSiblings > 0) {
+            return res.status(409).json({
+              message: "ยังมีงานอื่นค้างอยู่ใน สิ่งที่ต้องทำ / กำลังทำ / ตรวจสอบ — ต้องเคลียร์งานให้หมดก่อน จึงจะขยับการ์ด Ticket ได้",
+            });
+          }
+        }
       }
     }
 

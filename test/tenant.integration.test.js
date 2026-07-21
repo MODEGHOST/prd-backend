@@ -16,6 +16,7 @@ let foreignCompanyId;
 let foreignMembershipId;
 let registeredUserId;
 let registeredUserEmail;
+let registeredUsername;
 let developerVisibilityIssueId;
 let hierarchyTargetMembershipId;
 let hierarchyTargetOriginalRoleIds = [];
@@ -45,10 +46,13 @@ async function waitForHealth() {
 
 async function login(email, { fresh = false } = {}) {
   if (!fresh && loginCache.has(email)) return loginCache.get(email);
+  const username = String(email || "").includes("@")
+    ? String(email).split("@")[0]
+    : String(email || "");
   const response = await fetch(`${baseUrl}/api/auth/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email, password: "Password123!" }),
+    body: JSON.stringify({ username, password: "Password123!" }),
   });
   assert.equal(response.status, 200);
   const session = await response.json();
@@ -355,13 +359,15 @@ test("registration commits its verification email to the durable outbox", { skip
   assert.ok(company?.id, "registration company fixture is missing");
   const suffix = randomUUID().replaceAll("-", "");
   registeredUserEmail = `registration-${suffix}@projecthub.local`;
+  registeredUsername = `user_${suffix.slice(0, 12)}`;
   const response = await fetch(`${baseUrl}/api/auth/register`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      employeeCode: `INT-${suffix.slice(0, 12)}`,
+      employeeCode: String(Date.now()).slice(-8),
       firstName: "Integration",
       lastName: "Registration",
+      username: registeredUsername,
       email: registeredUserEmail,
       password: "Password123!",
       companyId: company.id,
@@ -413,7 +419,7 @@ test("membership approval cannot bypass email verification", { skip: !enabled },
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      email: registeredUserEmail,
+      username: registeredUsername,
       password: "Password123!",
     }),
   });
@@ -479,7 +485,7 @@ test("membership approval cannot bypass email verification", { skip: !enabled },
 });
 
 test("developers see all tickets but unrelated assigned tickets are read-only", { skip: !enabled }, async () => {
-  const requester = await login(registeredUserEmail);
+  const requester = await login(registeredUsername);
   const createResponse = await fetch(`${baseUrl}/api/issues`, {
     method: "POST",
     headers: {
@@ -577,7 +583,7 @@ test("company admins have full functional access but only manage lower roles", {
   );
   assert.equal(promoteResponse.status, 200);
 
-  const companyAdmin = await login(registeredUserEmail, { fresh: true });
+  const companyAdmin = await login(registeredUsername, { fresh: true });
   const [[{ permission_count: permissionCount }]] = await pool.execute(
     "SELECT COUNT(*) permission_count FROM permissions",
   );

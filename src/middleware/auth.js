@@ -61,8 +61,8 @@ export function createAuth({ pool, jwtSecret, authTokenTtl }) {
 
     const claims = jwt.verify(token, jwtSecret, JWT_VERIFY_OPTIONS);
     const [[account]] = await pool.execute(
-      `SELECT id, name, first_name, last_name, email, role legacy_role, department,
-              status, email_verified_at, token_version
+      `SELECT id, name, first_name, last_name, email, username, telegram_id,
+              role legacy_role, department, status, email_verified_at, token_version
        FROM users WHERE id = ?`,
       [claims.id],
     );
@@ -118,12 +118,28 @@ export function createAuth({ pool, jwtSecret, authTokenTtl }) {
        WHERE mr.membership_id = ?`,
       [membership.membership_id],
     );
+
+    let firstName = account.first_name || "";
+    let lastName = account.last_name || "";
+    if (!firstName && !lastName && account.name) {
+      const parts = String(account.name).trim().split(/\s+/).filter(Boolean);
+      firstName = parts[0] || "";
+      lastName = parts.slice(1).join(" ");
+    } else if (firstName && !lastName && account.name) {
+      const full = String(account.name).trim();
+      if (full.startsWith(firstName)) {
+        lastName = full.slice(firstName.length).trim();
+      }
+    }
+
     const session = {
       id: account.id,
       name: account.name,
-      firstName: account.first_name,
-      lastName: account.last_name,
+      firstName,
+      lastName,
       email: account.email,
+      username: account.username,
+      telegramId: account.telegram_id || null,
       department: account.department,
       emailVerifiedAt: account.email_verified_at,
       tokenVersion: Number(account.token_version),

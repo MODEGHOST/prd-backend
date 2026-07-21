@@ -142,11 +142,73 @@ export function createProjectIssueSyncService() {
     );
   }
 
+  /** Board is locked after the master Ticket is done and no open work remains. */
+  async function getProjectBoardGate(db, projectId) {
+    const [[row]] = await db.execute(
+      `SELECT
+         EXISTS (
+           SELECT 1
+           FROM tasks t
+           LEFT JOIN issues i ON i.id = t.issue_id
+           WHERE t.project_id = ?
+             AND t.issue_id IS NOT NULL
+             AND (
+               t.status = 'done'
+               OR i.status IN ('closed', 'cancelled', 'rejected')
+             )
+         ) AS has_finished_ticket,
+         (
+           SELECT COUNT(*)
+           FROM tasks t
+           WHERE t.project_id = ? AND t.status <> 'done'
+         ) AS open_task_count`,
+      [projectId, projectId],
+    );
+    const openTaskCount = Number(row?.open_task_count || 0);
+    const hasFinishedTicket = Boolean(row?.has_finished_ticket);
+    return {
+      boardLocked: hasFinishedTicket && openTaskCount === 0,
+      openTaskCount,
+      hasFinishedTicket,
+    };
+  }
+
+  async function countIncompleteSiblingTasks(db, projectId, excludeTaskId) {
+    const [[{ count }]] = await db.execute(
+      `SELECT COUNT(*) AS count
+       FROM tasks
+       WHERE project_id = ? AND id <> ? AND status <> 'done'`,
+      [projectId, excludeTaskId],
+    );
+    return Number(count || 0);
+  }
+
+  /**
+   * When closing / moving Ticket to done on a project board, all other tasks must be done.
+   * Returns an error message, or null if allowed.
+   */
+  async function getTicketCompletionBlockReason(db, issue) {
+    if (!issue?.project_id) return null;
+    const [linkedTasks] = await db.execute(
+      "SELECT id FROM tasks WHERE issue_id = ? ORDER BY id LIMIT 1",
+      [issue.id],
+    );
+    const linkedTaskId = linkedTasks[0]?.id || 0;
+    const incomplete = await countIncompleteSiblingTasks(db, issue.project_id, linkedTaskId);
+    if (incomplete > 0) {
+      return "ยังมีงานอื่นค้างอยู่ใน สิ่งที่ต้องทำ / กำลังทำ / ตรวจสอบ — ต้องเคลียร์งานให้หมดก่อน จึงจะปิด Ticket ได้";
+    }
+    return null;
+  }
+
   return {
     addIssueActivity,
+    countIncompleteSiblingTasks,
     ensureIssueMember,
     ensureLinkedIssueTask,
     ensureProjectMember,
+    getProjectBoardGate,
+    getTicketCompletionBlockReason,
     issueStateForTaskStatus,
     syncIssueMembersFromProject,
     syncSingleLinkedTask,

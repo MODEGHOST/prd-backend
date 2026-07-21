@@ -4,6 +4,36 @@ import {
 } from "../services/email-templates.js";
 import { passwordPolicyErrors } from "../core/password-policy.js";
 import { JWT_SIGN_OPTIONS } from "../middleware/auth.js";
+import { readTokenFromRequest } from "../core/session-cookie.js";
+
+const USERNAME_PATTERN = /^[a-zA-Z0-9._-]{3,50}$/;
+const TELEGRAM_PATTERN = /^@?[a-zA-Z0-9_]{3,64}$/;
+
+function normalizeUsername(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function normalizeTelegramId(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  return raw.startsWith("@") ? raw : raw;
+}
+
+function usernameError(username) {
+  if (!username) return "กรุณากรอกชื่อผู้ใช้";
+  if (!USERNAME_PATTERN.test(username)) {
+    return "ชื่อผู้ใช้ต้องมี 3-50 ตัวอักษร (a-z, 0-9, . _ -)";
+  }
+  return null;
+}
+
+function telegramError(telegramId) {
+  if (!telegramId) return null;
+  if (!TELEGRAM_PATTERN.test(telegramId)) {
+    return "รูปแบบ Telegram ID ไม่ถูกต้อง";
+  }
+  return null;
+}
 
 export function registerPublicAuthRoutes(app, deps) {
   const {
@@ -40,8 +70,20 @@ export function registerPublicAuthRoutes(app, deps) {
   }));
 
   app.post("/api/auth/register", authRateLimit({ limit: 5 }), wrap(async (req, res) => {
-    const { employeeCode, firstName, lastName, email, password, companyId, inviteToken } = req.body;
+    const {
+      employeeCode,
+      firstName,
+      lastName,
+      email,
+      username,
+      telegramId,
+      password,
+      companyId,
+      inviteToken,
+    } = req.body;
     const normalizedEmail = String(email || "").trim().toLowerCase();
+    const normalizedUsername = normalizeUsername(username);
+    const normalizedTelegram = normalizeTelegramId(telegramId);
     const inviteHash = inviteToken
       ? createHash("sha256").update(String(inviteToken)).digest("hex")
       : null;
@@ -49,6 +91,13 @@ export function registerPublicAuthRoutes(app, deps) {
         || !normalizedEmail || !password || !companyId) {
       return res.status(400).json({ message: "กรุณากรอกข้อมูลสมัครสมาชิกให้ครบถ้วน" });
     }
+    if (!/^\d{8}$/.test(String(employeeCode).trim())) {
+      return res.status(400).json({ message: "รหัสพนักงานต้องเป็นตัวเลข 8 หลัก" });
+    }
+    const badUsername = usernameError(normalizedUsername);
+    if (badUsername) return res.status(400).json({ message: badUsername });
+    const badTelegram = telegramError(normalizedTelegram);
+    if (badTelegram) return res.status(400).json({ message: badTelegram });
     const passwordErrors = passwordPolicyErrors(password);
     if (passwordErrors.length) {
       return res.status(400).json({
@@ -78,6 +127,30 @@ export function registerPublicAuthRoutes(app, deps) {
       );
     if (!company) return res.status(400).json({ message: "บริษัทไม่เปิดรับสมัคร" });
 
+    const [[existingUsername]] = await pool.execute(
+      "SELECT id FROM users WHERE username = ?",
+      [normalizedUsername],
+    );
+    if (existingUsername) {
+      return res.status(409).json({ message: "ชื่อผู้ใช้นี้ถูกใช้แล้ว" });
+    }
+    const [[existingEmail]] = await pool.execute(
+      "SELECT id FROM users WHERE email = ?",
+      [normalizedEmail],
+    );
+    if (existingEmail) {
+      return res.status(409).json({ message: "อีเมลนี้ถูกใช้แล้ว" });
+    }
+    if (normalizedTelegram) {
+      const [[existingTelegram]] = await pool.execute(
+        "SELECT id FROM users WHERE telegram_id = ?",
+        [normalizedTelegram],
+      );
+      if (existingTelegram) {
+        return res.status(409).json({ message: "Telegram ID นี้ถูกใช้แล้ว" });
+      }
+    }
+
     const passwordHash = await bcrypt.hash(password, 12);
     const { token, hash } = createOneTimeToken();
     const verificationUrl =
@@ -88,13 +161,15 @@ export function registerPublicAuthRoutes(app, deps) {
       await conn.beginTransaction();
       const [result] = await conn.execute(
         `INSERT INTO users
-          (name, first_name, last_name, email, password_hash, role, status)
-         VALUES (?, ?, ?, ?, ?, 'requester', 'pending')`,
+          (name, first_name, last_name, email, username, telegram_id, password_hash, role, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'requester', 'pending')`,
         [
           `${firstName.trim()} ${lastName.trim()}`,
           firstName.trim(),
           lastName.trim(),
           normalizedEmail,
+          normalizedUsername,
+          normalizedTelegram,
           passwordHash,
         ],
       );
@@ -401,18 +476,20 @@ export function registerPublicAuthRoutes(app, deps) {
   }));
 
   app.post("/api/auth/login", authRateLimit({ limit: 10 }), wrap(async (req, res) => {
-    const { email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({ message: "กรุณากรอกอีเมลและรหัสผ่าน" });
+    const username = normalizeUsername(req.body.username);
+    const { password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ message: "กรุณากรอกชื่อผู้ใช้และรหัสผ่าน" });
     }
     const [rows] = await pool.execute(
-      `SELECT id, name, email, password_hash, status, email_verified_at, token_version
-       FROM users WHERE email = ?`,
-      [email.toLowerCase()],
+      `SELECT id, name, email, username, password_hash, status, email_verified_at, token_version
+       FROM users
+       WHERE username = ?`,
+      [username],
     );
     const user = rows[0];
     if (!user || !(await bcrypt.compare(password, user.password_hash))) {
-      return res.status(401).json({ message: "อีเมลหรือรหัสผ่านไม่ถูกต้อง" });
+      return res.status(401).json({ message: "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" });
     }
     if (!user.email_verified_at) {
       return res.status(403).json({
@@ -473,6 +550,84 @@ export function registerPublicAuthRoutes(app, deps) {
       [req.user.id],
     );
     res.json({ user: req.user, companies });
+  }));
+
+  app.patch("/api/auth/me", auth, wrap(async (req, res) => {
+    const firstName = req.body.firstName !== undefined
+      ? String(req.body.firstName || "").trim()
+      : undefined;
+    const lastName = req.body.lastName !== undefined
+      ? String(req.body.lastName || "").trim()
+      : undefined;
+    const telegramProvided = Object.hasOwn(req.body, "telegramId");
+    const normalizedTelegram = telegramProvided
+      ? normalizeTelegramId(req.body.telegramId)
+      : undefined;
+
+    if (firstName !== undefined && !firstName) {
+      return res.status(400).json({ message: "กรุณากรอกชื่อ" });
+    }
+    if (lastName !== undefined && !lastName) {
+      return res.status(400).json({ message: "กรุณากรอกนามสกุล" });
+    }
+    if (telegramProvided) {
+      const badTelegram = telegramError(normalizedTelegram);
+      if (badTelegram) return res.status(400).json({ message: badTelegram });
+      if (normalizedTelegram) {
+        const [[taken]] = await pool.execute(
+          "SELECT id FROM users WHERE telegram_id = ? AND id <> ?",
+          [normalizedTelegram, req.user.id],
+        );
+        if (taken) {
+          return res.status(409).json({ message: "Telegram ID นี้ถูกใช้แล้ว" });
+        }
+      }
+    }
+
+    const fields = [];
+    const values = [];
+    if (firstName !== undefined) {
+      fields.push("first_name = ?");
+      values.push(firstName);
+    }
+    if (lastName !== undefined) {
+      fields.push("last_name = ?");
+      values.push(lastName);
+    }
+    if (firstName !== undefined || lastName !== undefined) {
+      const nextFirst = firstName ?? req.user.firstName ?? "";
+      const nextLast = lastName ?? req.user.lastName ?? "";
+      fields.push("name = ?");
+      values.push(`${nextFirst} ${nextLast}`.trim());
+    }
+    if (telegramProvided) {
+      fields.push("telegram_id = ?");
+      values.push(normalizedTelegram);
+    }
+    if (!fields.length) {
+      return res.status(400).json({ message: "ไม่มีข้อมูลให้อัปเดต" });
+    }
+    values.push(req.user.id);
+    await pool.execute(
+      `UPDATE users SET ${fields.join(", ")} WHERE id = ?`,
+      values,
+    );
+    invalidateSessionCache?.();
+    const token = readTokenFromRequest(req);
+    const session = await loadSession(token);
+    const [companies] = await pool.execute(
+      `SELECT c.id, c.name, c.parent_id, cm.employee_code, cm.status
+       FROM company_memberships cm
+       JOIN companies c ON c.id = cm.company_id
+       WHERE cm.user_id = ? AND cm.status = 'active' AND c.is_active = TRUE
+       ORDER BY c.name`,
+      [session.id],
+    );
+    res.json({
+      message: "บันทึกข้อมูลโปรไฟล์แล้ว",
+      user: session,
+      companies,
+    });
   }));
 
   app.post("/api/auth/switch-company", auth, wrap(async (req, res) => {

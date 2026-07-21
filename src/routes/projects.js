@@ -38,6 +38,7 @@ export function registerProjectRoutes(app, deps) {
     canManageProject,
     config,
     ensureProjectMember,
+    getProjectBoardGate,
     getProjectById,
     hasPermission,
     io,
@@ -281,8 +282,10 @@ export function registerProjectRoutes(app, deps) {
     const isMember = hasPermission(req.user, "projects.read_all")
       || members.some((m) => Number(m.user_id) === Number(req.user.id));
     const canEditPlans = await isProjectStaffMember(projectId, req.user.id);
+    const boardGate = await getProjectBoardGate(pool, projectId);
     const canCreateTasks = hasPermission(req.user, "tasks.create")
-      && await isProjectStaffMember(projectId, req.user.id);
+      && await isProjectStaffMember(projectId, req.user.id)
+      && !boardGate.boardLocked;
     const [[work]] = await pool.execute(
       `SELECT
          (
@@ -309,6 +312,8 @@ export function registerProjectRoutes(app, deps) {
         completion_percent: Number(work.total || 0)
           ? Math.round((Number(work.done || 0) / Number(work.total)) * 100)
           : 0,
+        board_locked: boardGate.boardLocked,
+        open_task_count: boardGate.openTaskCount,
       },
       members,
       permissions: {
@@ -316,6 +321,7 @@ export function registerProjectRoutes(app, deps) {
         isMember,
         canEditPlans,
         canCreateTasks,
+        boardLocked: boardGate.boardLocked,
       },
     });
   }));
@@ -807,6 +813,34 @@ export function registerProjectRoutes(app, deps) {
       const access = await canAccessProject(req.user, projectId);
       if (access === null) return res.status(404).json({ message: "ไม่พบโครงการ" });
       if (!access) return res.status(403).json({ message: "คุณไม่มีสิทธิ์เข้าถึงโครงการนี้" });
+
+      const project = await getProjectById(projectId, req.user.companyId);
+      if (!project) return res.status(404).json({ message: "ไม่พบโครงการ" });
+      const boardGate = await getProjectBoardGate(pool, projectId);
+      const [[work]] = await pool.execute(
+        `SELECT
+           (
+             SELECT COUNT(*) FROM tasks t
+             WHERE t.project_id = ? AND t.issue_id IS NULL
+           ) + (
+             SELECT COUNT(*) FROM issues i WHERE i.project_id = ?
+           ) total,
+           (
+             SELECT COUNT(*) FROM tasks t
+             WHERE t.project_id = ? AND t.issue_id IS NULL AND t.status = 'done'
+           ) + (
+             SELECT COUNT(*) FROM issues i WHERE i.project_id = ? AND i.status = 'closed'
+           ) done`,
+        [projectId, projectId, projectId, projectId],
+      );
+      const workTotal = Number(work?.total || 0);
+      const workDone = Number(work?.done || 0);
+      const workComplete = workTotal > 0 && workDone >= workTotal;
+      if (boardGate.boardLocked || workComplete || project.status === "completed") {
+        return res.status(409).json({
+          message: "งานทั้งหมดเสร็จสิ้นแล้ว ไม่สามารถส่งข้อความในแชททีมได้อีก",
+        });
+      }
 
       const files = req.files || [];
       const body = String(req.body?.body || "").trim();
