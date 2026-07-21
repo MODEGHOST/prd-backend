@@ -1,4 +1,4 @@
-USE prdproject;
+USE lfbsmart_project;
 
 -- Username for login (email remains for verification / password reset)
 ALTER TABLE users

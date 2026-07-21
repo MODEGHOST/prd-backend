@@ -1,7 +1,7 @@
-USE prdproject;
+USE lfbsmart_project;
 
 -- Multi-company/RBAC expansion for MariaDB as shipped with XAMPP.
--- Run after prdproject.sql and the existing feature migrations.
+-- Run after lfbsmart_project.sql and the existing feature migrations.
 -- Statements use IF NOT EXISTS and upserts so an interrupted import can usually be resumed.
 
 CREATE TABLE IF NOT EXISTS companies (

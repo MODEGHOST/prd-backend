@@ -1,4 +1,4 @@
-USE prdproject;
+USE lfbsmart_project;
 
 -- P2 issue chat attachments.
 -- Rerunnable on MariaDB 10.4: column creation uses MariaDB's IF NOT EXISTS,

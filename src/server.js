@@ -1,3 +1,4 @@
+import "./core/load-env.js";
 import bcrypt from "bcryptjs";
 import { createApplication } from "./app.js";
 import { config } from "./core/config.js";
@@ -36,7 +37,7 @@ async function seed() {
       [passwordHash, passwordHash, passwordHash],
     );
     const [[company]] = await conn.execute(
-      "SELECT id FROM companies WHERE slug = 'default-company'",
+      "SELECT id FROM companies WHERE slug IN ('lee-fibreboard', 'default-company') ORDER BY FIELD(slug, 'lee-fibreboard', 'default-company') LIMIT 1",
     );
     const [users] = await conn.query("SELECT id, role FROM users");
     for (const user of users) {

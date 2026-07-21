@@ -1,4 +1,4 @@
-USE prdproject;
+USE lfbsmart_project;
 
 -- P3 private attachments for project chat.
 -- Rerunnable on MariaDB 10.4 and safe after the P2/RBAC hardening migrations.

@@ -1,4 +1,4 @@
-USE prdproject;
+USE lfbsmart_project;
 
 ALTER TABLE issues
   ADD COLUMN IF NOT EXISTS board_status ENUM('todo', 'doing', 'review', 'done') NULL AFTER assignee_id;

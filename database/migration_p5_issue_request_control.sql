@@ -1,4 +1,4 @@
-USE prdproject;
+USE lfbsmart_project;
 
 ALTER TABLE issues
   MODIFY status ENUM(

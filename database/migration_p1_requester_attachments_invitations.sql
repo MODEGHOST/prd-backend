@@ -1,4 +1,4 @@
-USE prdproject;
+USE lfbsmart_project;
 
 -- P1 requester context, private attachments, and invitation workflow.
 -- Rerunnable on MySQL 8+.

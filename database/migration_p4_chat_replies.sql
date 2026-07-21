@@ -1,4 +1,4 @@
-USE prdproject;
+USE lfbsmart_project;
 
 -- P4 reply metadata for Issue and project chat.
 -- Rerunnable on MariaDB 10.4. Composite self references also prevent

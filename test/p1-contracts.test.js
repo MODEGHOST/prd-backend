@@ -11,7 +11,7 @@ const [issues, projects, invitations, attachments, migration, baseline, projectF
   read("../src/routes/invitations.js"),
   read("../src/core/attachments.js"),
   read("../database/migration_p1_requester_attachments_invitations.sql"),
-  read("../database/prdproject.sql"),
+  read("../database/lfbsmart_project.sql"),
   read("../../frontend/src/components/forms/ProjectForm.jsx"),
 ]);
 

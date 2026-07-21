@@ -7,7 +7,7 @@ const [issues, projects, migration, baseline, readme] = await Promise.all([
   read("../src/routes/issues.js"),
   read("../src/routes/projects.js"),
   read("../database/migration_p4_chat_replies.sql"),
-  read("../database/prdproject.sql"),
+  read("../database/lfbsmart_project.sql"),
   read("../../README.md"),
 ]);
 

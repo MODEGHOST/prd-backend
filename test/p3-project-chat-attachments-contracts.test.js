@@ -8,7 +8,7 @@ const [projects, helpers, migration, baseline, api, miniChat, projectDetail, rea
     read("../src/routes/projects.js"),
     read("../src/core/attachments.js"),
     read("../database/migration_p3_project_chat_attachments.sql"),
-    read("../database/prdproject.sql"),
+    read("../database/lfbsmart_project.sql"),
     read("../../frontend/src/services/api.js"),
     read("../../frontend/src/components/chat/MiniChatDock.jsx"),
     read("../../frontend/src/pages/ProjectDetailPage.jsx"),

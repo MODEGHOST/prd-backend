@@ -5,7 +5,7 @@ import { loadConfig } from "../src/core/config.js";
 test("development config provides local-safe defaults", () => {
   const config = loadConfig({});
   assert.equal(config.port, 4000);
-  assert.equal(config.db.database, "prdproject");
+  assert.equal(config.db.database, "lfbsmart_project");
   assert.equal(config.db.connectionLimit, 30);
   assert.equal(config.production, false);
 });

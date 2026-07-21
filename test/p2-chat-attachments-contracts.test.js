@@ -6,7 +6,7 @@ const read = (relativePath) => readFile(new URL(relativePath, import.meta.url), 
 const [issues, migration, baseline, readme] = await Promise.all([
   read("../src/routes/issues.js"),
   read("../database/migration_p2_chat_attachments.sql"),
-  read("../database/prdproject.sql"),
+  read("../database/lfbsmart_project.sql"),
   read("../../README.md"),
 ]);
 

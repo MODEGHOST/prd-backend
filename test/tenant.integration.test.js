@@ -67,7 +67,7 @@ before(async () => {
     port: Number(process.env.DB_PORT || 3306),
     user: process.env.DB_USER || "root",
     password: process.env.DB_PASSWORD || "",
-    database: process.env.DB_NAME || "prdproject",
+    database: process.env.DB_NAME || "lfbsmart_project",
   });
   const [[requester]] = await pool.execute(
     "SELECT id FROM users WHERE email = 'requester@projecthub.local'",

@@ -1,4 +1,4 @@
-USE prdproject;
+USE lfbsmart_project;
 
 ALTER TABLE tasks
   ADD COLUMN IF NOT EXISTS difficulty ENUM('easy', 'medium', 'hard')

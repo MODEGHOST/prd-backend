@@ -1,8 +1,8 @@
 -- Project collaboration migration for existing MySQL/MariaDB (XAMPP)
--- RUN ONCE only on databases that already imported an older prdproject.sql
--- Fresh installs: import database/prdproject.sql instead (do not run this file)
+-- RUN ONCE only on databases that already imported an older lfbsmart_project.sql
+-- Fresh installs: import database/lfbsmart_project.sql instead (do not run this file)
 
-USE prdproject;
+USE lfbsmart_project;
 
 -- projects: creator, budget, currency
 ALTER TABLE projects

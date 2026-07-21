@@ -1,4 +1,4 @@
-USE prdproject;
+USE lfbsmart_project;
 
 -- P0 role hierarchy and project approval hardening.
 -- This migration is intentionally rerunnable and upgrades databases that have

@@ -1,4 +1,4 @@
-USE prdproject;
+USE lfbsmart_project;
 
 UPDATE issues
 SET status = 'closed'

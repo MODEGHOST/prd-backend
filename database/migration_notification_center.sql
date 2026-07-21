@@ -1,4 +1,4 @@
-USE prdproject;
+USE lfbsmart_project;
 
 ALTER TABLE notifications
   ADD COLUMN type VARCHAR(32) NOT NULL DEFAULT 'general' AFTER message,

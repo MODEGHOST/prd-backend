@@ -1,4 +1,4 @@
-USE prdproject;
+USE lfbsmart_project;
 
 -- Production hardening: direct task tenancy, tenant composite keys, migration
 -- ledger, and a durable outbox for asynchronous notifications/events.

@@ -1,7 +1,7 @@
-CREATE DATABASE IF NOT EXISTS prdproject
+CREATE DATABASE IF NOT EXISTS lfbsmart_project
   CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
-USE prdproject;
+USE lfbsmart_project;
 
 CREATE TABLE IF NOT EXISTS users (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,

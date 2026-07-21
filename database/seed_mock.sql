@@ -1,8 +1,8 @@
 -- ProjectHub Mock Data
--- Import ไฟล์นี้หลัง schema แล้ว (ฐานข้อมูล: prdproject)
+-- Import ไฟล์นี้หลัง schema แล้ว (ฐานข้อมูล: lfbsmart_project)
 -- รหัสผ่านทุกบัญชี: Password123!
 
-USE prdproject;
+USE lfbsmart_project;
 
 -- ล้างข้อมูลเก่า (ถ้าต้องการเริ่มใหม่)
 SET FOREIGN_KEY_CHECKS = 0;

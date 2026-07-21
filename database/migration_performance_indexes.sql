@@ -1,4 +1,4 @@
-USE prdproject;
+USE lfbsmart_project;
 
 -- Speed up board / my-tasks / project progress at 500+ tasks scale.
 -- Safe to rerun: every index is checked before it is created.

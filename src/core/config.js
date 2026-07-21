@@ -112,7 +112,7 @@ export function loadConfig(env = process.env) {
       port: positiveInteger(env.DB_PORT, 3306, "DB_PORT", 65535),
       user: dbUser,
       password: dbPassword,
-      database: env.DB_NAME || "prdproject",
+      database: env.DB_NAME || "lfbsmart_project",
       connectionLimit: positiveInteger(env.DB_POOL_LIMIT, 30, "DB_POOL_LIMIT"),
     }),
   });
