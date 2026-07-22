@@ -9,6 +9,12 @@ import {
   storagePath,
   validAttachment,
 } from "../core/attachments.js";
+import {
+  emitIssueChanged,
+  emitTaskChanged,
+  fetchIssueListRow,
+  fetchTaskBoardRow,
+} from "../services/realtime-patches.js";
 
 function ticketNumber() {
   const date = new Date().toISOString().slice(2, 10).replaceAll("-", "");
@@ -63,6 +69,7 @@ export function registerIssueRoutes(app, deps) {
     ensureLinkedIssueTask,
     ensureProjectMember,
     getIssueById,
+    getIssueRecipientIds,
     getTicketCompletionBlockReason,
     hasPermission,
     io,
@@ -97,6 +104,58 @@ export function registerIssueRoutes(app, deps) {
       || (hasPermission(user, "issues.update")
         && await isIssueParticipant(issue.id, user.id));
   };
+
+  async function broadcastIssuePatch({
+    op,
+    issueId,
+    actorId,
+    companyId,
+    extraRecipientIds = [],
+  }) {
+    const issue = await fetchIssueListRow(pool, {
+      issueId,
+      companyId,
+      viewerUserId: actorId,
+    });
+    if (!issue) return null;
+
+    let linkedTask = null;
+    const [linkedTasks] = await pool.execute(
+      "SELECT id FROM tasks WHERE issue_id = ? ORDER BY id ASC LIMIT 2",
+      [issueId],
+    );
+    if (linkedTasks.length === 1) {
+      linkedTask = await fetchTaskBoardRow(pool, {
+        taskId: linkedTasks[0].id,
+        companyId,
+        viewerUserId: actorId,
+      });
+      if (linkedTask) {
+        emitTaskChanged(io, {
+          companyId,
+          projectId: linkedTask.project_id,
+          actorId,
+          op: "update",
+          task: linkedTask,
+          linkedIssue: issue,
+        });
+      }
+    }
+
+    const baseRecipients = getIssueRecipientIds
+      ? await getIssueRecipientIds(issueId)
+      : [];
+    const recipientIds = [...baseRecipients, ...extraRecipientIds];
+    await emitIssueChanged(io, {
+      companyId,
+      actorId,
+      op,
+      issue,
+      linkedTask,
+      recipientIds,
+    });
+    return { issue, linkedTask };
+  }
 
   app.get("/api/issues", auth, wrap(async (req, res) => {
     const where = ["i.company_id = ?"];
@@ -310,7 +369,19 @@ export function registerIssueRoutes(app, deps) {
         companyId: req.user.companyId,
       }),
     ));
-    res.status(201).json({ id: result.insertId, ticketNo, message: "ส่งเรื่องเรียบร้อย" });
+    const patch = await broadcastIssuePatch({
+      op: "create",
+      issueId: result.insertId,
+      actorId: req.user.id,
+      companyId: req.user.companyId,
+      extraRecipientIds: issueResponders.map((responder) => responder.id),
+    });
+    res.status(201).json({
+      id: result.insertId,
+      ticketNo,
+      message: "ส่งเรื่องเรียบร้อย",
+      issue: patch?.issue || null,
+    });
   }));
   
   app.get("/api/issues/:id", auth, wrap(async (req, res) => {
@@ -488,7 +559,13 @@ export function registerIssueRoutes(app, deps) {
         entityId: issue.id,
         actorName: req.user.name,
       });
-      res.json({ message: "รับเรื่องเรียบร้อย" });
+      const patch = await broadcastIssuePatch({
+        op: "transition",
+        issueId: issue.id,
+        actorId: req.user.id,
+        companyId: req.user.companyId,
+      });
+      res.json({ message: "รับเรื่องเรียบร้อย", issue: patch?.issue || null });
     } catch (error) {
       await connection.rollback();
       throw error;
@@ -617,7 +694,13 @@ export function registerIssueRoutes(app, deps) {
         actorName: req.user.name,
       }),
     ]);
-    res.json({ message: "มอบหมายผู้รับผิดชอบแล้ว" });
+    const patch = await broadcastIssuePatch({
+      op: "update",
+      issueId: issue.id,
+      actorId: req.user.id,
+      companyId: req.user.companyId,
+    });
+    res.json({ message: "มอบหมายผู้รับผิดชอบแล้ว", issue: patch?.issue || null });
   }));
   
   app.post("/api/issues/:id/convert-to-project", auth, requirePermission("projects.create", "issues.transition"), wrap(async (req, res) => {
@@ -1003,7 +1086,13 @@ export function registerIssueRoutes(app, deps) {
         `${issue.ticket_no}: ${activities.join(", ")}`,
       );
     }
-    res.json({ message: "อัปเดต Ticket แล้ว" });
+    const patch = await broadcastIssuePatch({
+      op: "update",
+      issueId: issue.id,
+      actorId: req.user.id,
+      companyId: req.user.companyId,
+    });
+    res.json({ message: "อัปเดต Ticket แล้ว", issue: patch?.issue || null });
   }));
 
   app.post("/api/issues/:id/cancel", auth, requirePermission("issues.update"), wrap(async (req, res) => {
@@ -1040,7 +1129,13 @@ export function registerIssueRoutes(app, deps) {
         "ผู้แจ้งยกเลิกคำขอ",
       );
       await connection.commit();
-      res.json({ message: "ยกเลิกคำขอเรียบร้อย" });
+      const patch = await broadcastIssuePatch({
+        op: "transition",
+        issueId: issue.id,
+        actorId: req.user.id,
+        companyId: req.user.companyId,
+      });
+      res.json({ message: "ยกเลิกคำขอเรียบร้อย", issue: patch?.issue || null });
     } catch (error) {
       await connection.rollback();
       throw error;
@@ -1102,7 +1197,13 @@ export function registerIssueRoutes(app, deps) {
       entityId: issue.id,
       actorName: req.user.name,
     });
-    res.json({ message: "Reject คำขอเรียบร้อย" });
+    const patch = await broadcastIssuePatch({
+      op: "transition",
+      issueId: issue.id,
+      actorId: req.user.id,
+      companyId: req.user.companyId,
+    });
+    res.json({ message: "Reject คำขอเรียบร้อย", issue: patch?.issue || null });
   }));
   
   app.post("/api/issues/:id/board-status", auth, requirePermission("issues.transition"), wrap(async (req, res) => {
@@ -1169,7 +1270,17 @@ export function registerIssueRoutes(app, deps) {
       boardStatus === "done" ? "Ticket เสร็จสิ้นแล้ว" : "Ticket มีการเปลี่ยนสถานะ",
       `${issue.ticket_no}: ${labels[boardStatus]}`,
     );
-    res.json({ message: boardStatus === "done" ? "ปิด Ticket เรียบร้อย" : "ย้าย Ticket แล้ว" });
+    const patch = await broadcastIssuePatch({
+      op: "transition",
+      issueId: issue.id,
+      actorId: req.user.id,
+      companyId: req.user.companyId,
+    });
+    res.json({
+      message: boardStatus === "done" ? "ปิด Ticket เรียบร้อย" : "ย้าย Ticket แล้ว",
+      issue: patch?.issue || null,
+      linkedTask: patch?.linkedTask || null,
+    });
   }));
   
   app.post("/api/issues/:id/workflow", auth, requirePermission("issues.transition"), wrap(async (req, res) => {
@@ -1237,7 +1348,17 @@ export function registerIssueRoutes(app, deps) {
       isStarting ? "เริ่มดำเนินการแล้ว" : "Ticket เสร็จสิ้นแล้ว",
       `${issue.ticket_no}: ${issue.title}`,
     );
-    res.json({ message: isStarting ? "เริ่มดำเนินการแล้ว" : "ปิด Ticket เรียบร้อย" });
+    const patch = await broadcastIssuePatch({
+      op: "transition",
+      issueId: issue.id,
+      actorId: req.user.id,
+      companyId: req.user.companyId,
+    });
+    res.json({
+      message: isStarting ? "เริ่มดำเนินการแล้ว" : "ปิด Ticket เรียบร้อย",
+      issue: patch?.issue || null,
+      linkedTask: patch?.linkedTask || null,
+    });
   }));
   
   app.get("/api/issues/:id/attachments", auth, wrap(async (req, res) => {

@@ -1,3 +1,10 @@
+import {
+  emitIssueChanged,
+  emitTaskChanged,
+  fetchIssueListRow,
+  fetchTaskBoardRow,
+} from "../services/realtime-patches.js";
+
 export function registerTaskRoutes(app, deps) {
   const {
     addIssueActivity,
@@ -6,8 +13,10 @@ export function registerTaskRoutes(app, deps) {
     canManageProject,
     countIncompleteSiblingTasks,
     getIssueById,
+    getIssueRecipientIds,
     getProjectBoardGate,
     hasPermission,
+    io,
     isIssueParticipant,
     isProjectMember,
     isProjectStaffMember,
@@ -235,7 +244,32 @@ export function registerTaskRoutes(app, deps) {
       entityType: "project",
       entityId: pid,
     });
-    res.status(201).json({ id: result.insertId, message: "สร้างงานเรียบร้อย" });
+    const task = await fetchTaskBoardRow(pool, {
+      taskId: result.insertId,
+      companyId: req.user.companyId,
+      viewerUserId: req.user.id,
+    });
+    const nextGate = await getProjectBoardGate(pool, pid);
+    emitTaskChanged(io, {
+      companyId: req.user.companyId,
+      projectId: pid,
+      actorId: req.user.id,
+      op: "create",
+      task,
+      boardGate: {
+        boardLocked: Boolean(nextGate.boardLocked),
+        openTaskCount: Number(nextGate.openTaskCount || 0),
+      },
+    });
+    res.status(201).json({
+      id: result.insertId,
+      message: "สร้างงานเรียบร้อย",
+      task,
+      boardGate: {
+        boardLocked: Boolean(nextGate.boardLocked),
+        openTaskCount: Number(nextGate.openTaskCount || 0),
+      },
+    });
   }));
 
   app.patch("/api/tasks/:id", auth, requirePermission("tasks.update"), wrap(async (req, res) => {
@@ -426,6 +460,56 @@ export function registerTaskRoutes(app, deps) {
         `${task.ticket_no}: ${labels[status]}`,
       );
     }
-    res.json({ message: updatesDetails ? "บันทึกรายละเอียดงานแล้ว" : "ย้ายงานเรียบร้อย" });
+
+    const patchedTask = await fetchTaskBoardRow(pool, {
+      taskId,
+      companyId: req.user.companyId,
+      viewerUserId: req.user.id,
+    });
+    const nextGate = await getProjectBoardGate(pool, task.project_id);
+    const nextBoardGate = {
+      boardLocked: Boolean(nextGate.boardLocked),
+      openTaskCount: Number(nextGate.openTaskCount || 0),
+    };
+    let linkedIssue = null;
+    if (task.issue_id) {
+      linkedIssue = await fetchIssueListRow(pool, {
+        issueId: task.issue_id,
+        companyId: req.user.companyId,
+        viewerUserId: req.user.id,
+      });
+    }
+
+    const op = status !== undefined && status !== task.status ? "move" : "update";
+    emitTaskChanged(io, {
+      companyId: req.user.companyId,
+      projectId: task.project_id,
+      actorId: req.user.id,
+      op,
+      task: patchedTask,
+      linkedIssue,
+      boardGate: nextBoardGate,
+    });
+
+    if (linkedIssue) {
+      const recipientIds = getIssueRecipientIds
+        ? await getIssueRecipientIds(task.issue_id)
+        : [];
+      await emitIssueChanged(io, {
+        companyId: req.user.companyId,
+        actorId: req.user.id,
+        op: "transition",
+        issue: linkedIssue,
+        linkedTask: patchedTask,
+        recipientIds,
+      });
+    }
+
+    res.json({
+      message: updatesDetails ? "บันทึกรายละเอียดงานแล้ว" : "ย้ายงานเรียบร้อย",
+      task: patchedTask,
+      linkedIssue,
+      boardGate: nextBoardGate,
+    });
   }));
 }

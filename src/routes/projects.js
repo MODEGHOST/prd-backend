@@ -9,6 +9,10 @@ import {
   storagePath,
   validAttachment,
 } from "../core/attachments.js";
+import {
+  emitWeeklyPlanChanged,
+  fetchWeeklyPlanRow,
+} from "../services/realtime-patches.js";
 
 function optionalReplyId(value) {
   if (value === undefined || value === null || value === "") return null;
@@ -647,8 +651,20 @@ export function registerProjectRoutes(app, deps) {
         entityId: projectId,
       });
     }
-  
-    res.status(201).json({ id: result.insertId, message: "สร้างช่วงงานในแผนโปรเจกต์แล้ว" });
+
+    const plan = await fetchWeeklyPlanRow(pool, result.insertId);
+    emitWeeklyPlanChanged(io, {
+      companyId: req.user.companyId,
+      projectId,
+      actorId: req.user.id,
+      op: "create",
+      plan,
+    });
+    res.status(201).json({
+      id: result.insertId,
+      message: "สร้างช่วงงานในแผนโปรเจกต์แล้ว",
+      plan,
+    });
   }));
   
   app.patch("/api/projects/:id/weekly-plans/:planId", auth, requirePermission("projects.plan.manage"), wrap(async (req, res) => {
@@ -733,7 +749,15 @@ export function registerProjectRoutes(app, deps) {
       `UPDATE weekly_plans SET ${fields.join(", ")} WHERE id = ? AND project_id = ?`,
       values,
     );
-    res.json({ message: "อัปเดตแผนงานโปรเจกต์แล้ว" });
+    const patchedPlan = await fetchWeeklyPlanRow(pool, planId);
+    emitWeeklyPlanChanged(io, {
+      companyId: req.user.companyId,
+      projectId,
+      actorId: req.user.id,
+      op: "update",
+      plan: patchedPlan,
+    });
+    res.json({ message: "อัปเดตแผนงานโปรเจกต์แล้ว", plan: patchedPlan });
   }));
   
   app.get("/api/projects/:id/messages", auth, wrap(async (req, res) => {
