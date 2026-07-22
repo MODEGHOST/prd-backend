@@ -43,7 +43,8 @@ export function loadConfig(env = process.env) {
   if (production && jwtSecret.length < 32) {
     throw new Error("JWT_SECRET must contain at least 32 characters in production");
   }
-  if (production && !resendApiKey) {
+  // Resend may be empty during staging on shared hosting; emails no-op until configured.
+  if (production && !resendApiKey && env.ALLOW_MISSING_RESEND !== "1") {
     throw new Error("RESEND_API_KEY is required in production");
   }
   if (production && /example\.com/i.test(emailFrom)) {
@@ -74,7 +75,7 @@ export function loadConfig(env = process.env) {
   return Object.freeze({
     nodeEnv,
     production,
-    port: positiveInteger(env.PORT, 4000, "PORT", 65535),
+    port: env.PORT || 4000,
     frontendUrl,
     jwtSecret,
     emailFrom,

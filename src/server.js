@@ -68,6 +68,15 @@ async function seed() {
 let closeRealtime = async () => {};
 let stopOutbox = async () => {};
 
+// Listen first so Passenger/CloudLinux availability checks do not get HTTP 500
+// when DB/bootstrap is still failing. /api/live stays up; /api/health waits for ready.
+server.listen(config.port, () => {
+  logger.info("server.listening", {
+    port: config.port,
+    environment: config.nodeEnv,
+  });
+});
+
 seed()
   .then(async () => {
     await pool.query("SELECT 1");
@@ -85,18 +94,17 @@ seed()
         },
       },
     });
-    server.listen(config.port, () => {
-      setReady(true);
-      logger.info("server.started", {
-        port: config.port,
-        environment: config.nodeEnv,
-        redisEnabled: Boolean(config.redisUrl),
-      });
+    setReady(true);
+    logger.info("server.started", {
+      port: config.port,
+      environment: config.nodeEnv,
+      redisEnabled: Boolean(config.redisUrl),
     });
   })
   .catch((error) => {
+    setReady(false);
     logger.error("server.start_failed", error);
-    process.exit(1);
+    // Keep process alive for hosting health checks; fix DB/env then Restart.
   });
 
 let shuttingDown = false;

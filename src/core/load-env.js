@@ -7,12 +7,25 @@ import { fileURLToPath } from "node:url";
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 /**
+ * Load an env file. When override=true, keep an already-assigned PORT
+ * (Passenger/CloudLinux injects it before boot).
+ */
+function applyEnvFile(path, { override = false } = {}) {
+  const existingPort = process.env.PORT;
+  dotenv.config({ path, override });
+  if (override && existingPort) {
+    process.env.PORT = existingPort;
+  }
+}
+
+/**
  * Local: backend/.env (preferred when present).
  * Server: backend/.env.production when .env is absent.
  * Force production file locally only with USE_PRODUCTION_ENV=1.
  *
- * Paths are resolved from the package root so Passenger/DirectAdmin
- * still find env files even when the process cwd is not the app folder.
+ * On the server, .env.production is applied with override so values like
+ * NODE_ENV=development in the file win over the panel's Application mode.
+ * Passenger's PORT is preserved.
  */
 export function loadEnv(rootDir = packageRoot) {
   const localPath = resolve(rootDir, ".env");
@@ -20,17 +33,17 @@ export function loadEnv(rootDir = packageRoot) {
   const forceProduction = process.env.USE_PRODUCTION_ENV === "1";
 
   if (forceProduction && existsSync(productionPath)) {
-    dotenv.config({ path: productionPath, override: true });
+    applyEnvFile(productionPath, { override: true });
     return;
   }
 
   if (existsSync(localPath)) {
-    dotenv.config({ path: localPath });
+    applyEnvFile(localPath, { override: false });
     return;
   }
 
   if (existsSync(productionPath)) {
-    dotenv.config({ path: productionPath });
+    applyEnvFile(productionPath, { override: true });
   }
 }
 

@@ -33,6 +33,19 @@ test("production requires transactional email configuration", () => {
   );
 });
 
+test("production may omit Resend when ALLOW_MISSING_RESEND=1", () => {
+  const config = loadConfig({
+    NODE_ENV: "production",
+    JWT_SECRET: "a".repeat(48),
+    EMAIL_FROM: "ProjectHub <noreply@lfbsmart.com>",
+    DB_PASSWORD: "secret",
+    ALLOW_MISSING_RESEND: "1",
+    SEED_DEMO_DATA: "0",
+  });
+  assert.equal(config.production, true);
+  assert.equal(config.resendApiKey, "");
+});
+
 test("production rejects an empty database password", () => {
   assert.throws(
     () => loadConfig({

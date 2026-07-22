@@ -55,3 +55,22 @@ test("server uses .env.production when .env is absent", () => {
 
   rmSync(dir, { recursive: true, force: true });
 });
+
+test("server .env.production overrides panel NODE_ENV but keeps Passenger PORT", () => {
+  const dir = mkdtempSync(join(tmpdir(), "projecthub-env-"));
+  writeFileSync(
+    join(dir, ".env.production"),
+    "NODE_ENV=development\nPORT=4000\nFRONTEND_URL=https://project.lfbsmart.com\n",
+  );
+
+  withCleanEnv(["NODE_ENV", "PORT", "FRONTEND_URL", "USE_PRODUCTION_ENV"], () => {
+    process.env.NODE_ENV = "production";
+    process.env.PORT = "passenger-port";
+    loadEnv(dir);
+    assert.equal(process.env.NODE_ENV, "development");
+    assert.equal(process.env.PORT, "passenger-port");
+    assert.equal(process.env.FRONTEND_URL, "https://project.lfbsmart.com");
+  });
+
+  rmSync(dir, { recursive: true, force: true });
+});
