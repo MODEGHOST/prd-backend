@@ -13,6 +13,12 @@ import {
   emitWeeklyPlanChanged,
   fetchWeeklyPlanRow,
 } from "../services/realtime-patches.js";
+import {
+  briefToDbColumns,
+  hydrateProjectBrief,
+  readProjectBrief,
+  validateProjectBrief,
+} from "../services/project-brief.js";
 
 function optionalReplyId(value) {
   if (value === undefined || value === null || value === "") return null;
@@ -100,7 +106,8 @@ export function registerProjectRoutes(app, deps) {
     const [rows] = await pool.execute(
       `SELECT p.id, p.name, p.code, p.status, p.start_date, p.end_date,
               p.budget, p.currency, p.owner_id, p.created_by, p.created_at,
-              LEFT(p.description, 280) AS description,
+              p.objective,
+              LEFT(COALESCE(NULLIF(p.objective, ''), p.description), 280) AS description,
               creator.name creator_name,
               owner.name owner_name,
               COALESCE(member_stats.member_count, 0) member_count,
@@ -168,13 +175,17 @@ export function registerProjectRoutes(app, deps) {
     const {
       name,
       code,
-      description,
-      prd,
       startDate,
       endDate,
       ownerId,
       memberIds,
     } = req.body;
+    const brief = readProjectBrief(req.body);
+    const briefError = validateProjectBrief(brief);
+    if (briefError) {
+      return res.status(400).json({ message: briefError });
+    }
+    const briefColumns = briefToDbColumns(brief);
   
     if (!name || !code) {
       return res.status(400).json({ message: "กรุณาระบุชื่อและรหัสโครงการ" });
@@ -197,20 +208,27 @@ export function registerProjectRoutes(app, deps) {
       await conn.beginTransaction();
       const [result] = await conn.execute(
         `INSERT INTO projects
-          (company_id, name, code, description, prd, status, start_date, end_date,
-           owner_id, approved_by, created_by, budget, currency)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (company_id, name, code, description, prd, objective, problem, expected_outcome,
+           extra_details, main_requirements, business_rules, status, start_date, end_date,
+           owner_id, approved_by, approved_at, created_by, budget, currency)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?)`,
         [
           req.user.companyId,
           name,
           String(code).toUpperCase(),
-          description || null,
-          prd || null,
-          "pending",
+          briefColumns.description,
+          briefColumns.prd,
+          briefColumns.objective,
+          briefColumns.problem,
+          briefColumns.expected_outcome,
+          briefColumns.extra_details,
+          briefColumns.main_requirements,
+          briefColumns.business_rules,
+          "active",
           startDate || null,
           endDate || null,
           owner,
-          null,
+          req.user.id,
           req.user.id,
           0,
           "THB",
@@ -260,7 +278,7 @@ export function registerProjectRoutes(app, deps) {
     if (access === null) return res.status(404).json({ message: "ไม่พบโครงการ" });
     if (!access) return res.status(403).json({ message: "คุณไม่มีสิทธิ์เข้าถึงโครงการนี้" });
   
-    const project = await getProjectById(projectId, req.user.companyId);
+    const project = hydrateProjectBrief(await getProjectById(projectId, req.user.companyId));
     const [members] = await pool.execute(
       `SELECT pm.user_id, pm.responsibility, pm.joined_at,
               u.name, u.email, u.role, u.department,
@@ -336,7 +354,7 @@ export function registerProjectRoutes(app, deps) {
     if (manage === null) return res.status(404).json({ message: "ไม่พบโครงการ" });
     if (!manage) return res.status(403).json({ message: "คุณไม่มีสิทธิ์จัดการโครงการนี้" });
   
-    const project = await getProjectById(projectId, req.user.companyId);
+    const project = hydrateProjectBrief(await getProjectById(projectId, req.user.companyId));
     const fields = [];
     const values = [];
   
@@ -347,13 +365,65 @@ export function registerProjectRoutes(app, deps) {
       fields.push("name = ?");
       values.push(String(req.body.name).trim());
     }
-    if (req.body.description !== undefined) {
-      fields.push("description = ?");
-      values.push(req.body.description || null);
-    }
-    if (req.body.prd !== undefined) {
-      fields.push("prd = ?");
-      values.push(req.body.prd || null);
+
+    const structuredBriefKeys = [
+      "objective",
+      "problem",
+      "expectedOutcome",
+      "extraDetails",
+      "mainRequirements",
+      "businessRules",
+    ];
+    const shouldUpdateBrief = [...structuredBriefKeys, "description", "prd"]
+      .some((key) => req.body[key] !== undefined);
+    if (shouldUpdateBrief) {
+      const hasDirectStructured = structuredBriefKeys.some((key) => req.body[key] !== undefined);
+      const brief = hasDirectStructured
+        ? readProjectBrief({
+          objective: req.body.objective !== undefined ? req.body.objective : project.objective,
+          problem: req.body.problem !== undefined ? req.body.problem : project.problem,
+          expectedOutcome: req.body.expectedOutcome !== undefined
+            ? req.body.expectedOutcome
+            : project.expected_outcome,
+          extraDetails: req.body.extraDetails !== undefined
+            ? req.body.extraDetails
+            : project.extra_details,
+          mainRequirements: req.body.mainRequirements !== undefined
+            ? req.body.mainRequirements
+            : project.main_requirements,
+          businessRules: req.body.businessRules !== undefined
+            ? req.body.businessRules
+            : project.business_rules,
+        })
+        : readProjectBrief({
+          description: req.body.description !== undefined ? req.body.description : project.description,
+          prd: req.body.prd !== undefined ? req.body.prd : project.prd,
+        });
+      const briefError = validateProjectBrief(brief);
+      if (briefError) {
+        return res.status(400).json({ message: briefError });
+      }
+      const briefColumns = briefToDbColumns(brief);
+      fields.push(
+        "description = ?",
+        "prd = ?",
+        "objective = ?",
+        "problem = ?",
+        "expected_outcome = ?",
+        "extra_details = ?",
+        "main_requirements = ?",
+        "business_rules = ?",
+      );
+      values.push(
+        briefColumns.description,
+        briefColumns.prd,
+        briefColumns.objective,
+        briefColumns.problem,
+        briefColumns.expected_outcome,
+        briefColumns.extra_details,
+        briefColumns.main_requirements,
+        briefColumns.business_rules,
+      );
     }
     if (req.body.startDate !== undefined) {
       fields.push("start_date = ?");
@@ -501,11 +571,10 @@ export function registerProjectRoutes(app, deps) {
     if (!manage) return res.status(403).json({ message: "คุณไม่มีสิทธิ์เปลี่ยนสถานะโครงการ" });
   
     const nextStatus = req.body.status;
-    const allowed = ["pending", "active", "on_hold", "completed", "rejected"];
+    const allowed = ["active", "on_hold", "completed", "rejected"];
     if (!allowed.includes(nextStatus)) {
       return res.status(400).json({ message: "สถานะไม่ถูกต้อง" });
     }
-    const isApprovalDecision = ["active", "rejected"].includes(nextStatus);
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
@@ -519,39 +588,23 @@ export function registerProjectRoutes(app, deps) {
         await conn.rollback();
         return res.status(404).json({ message: "ไม่พบโครงการ" });
       }
-      if (isApprovalDecision && lockedProject.status !== "pending") {
+      if (lockedProject.status === "rejected" && nextStatus !== "active") {
         await conn.rollback();
         return res.status(409).json({
-          message: "อนุมัติหรือปฏิเสธได้เฉพาะโครงการที่รออนุมัติ",
-        });
-      }
-      if (["on_hold", "completed"].includes(nextStatus)
-          && !["active", "on_hold"].includes(lockedProject.status)) {
-        await conn.rollback();
-        return res.status(409).json({
-          message: "ต้องอนุมัติโครงการก่อนจึงจะพักหรือปิดโครงการได้",
+          message: "โครงการที่ถูกปฏิเสธแล้วสามารถเปิดใหม่เป็นกำลังดำเนินการเท่านั้น",
         });
       }
       await conn.execute(
         `UPDATE projects
          SET status = ?,
-             approved_by = CASE WHEN ? THEN ? WHEN ? = 'pending' THEN NULL ELSE approved_by END,
-             approved_at = CASE WHEN ? THEN NOW() WHEN ? = 'pending' THEN NULL ELSE approved_at END
+             approved_by = COALESCE(approved_by, ?),
+             approved_at = COALESCE(approved_at, NOW())
          WHERE id = ? AND company_id = ?`,
-        [
-          nextStatus,
-          isApprovalDecision,
-          req.user.id,
-          nextStatus,
-          isApprovalDecision,
-          nextStatus,
-          projectId,
-          req.user.companyId,
-        ],
+        [nextStatus, req.user.id, projectId, req.user.companyId],
       );
       await audit(
         req,
-        isApprovalDecision ? `project.${nextStatus}` : "project.status_updated",
+        "project.status_updated",
         "project",
         projectId,
         { from: lockedProject.status, to: nextStatus },

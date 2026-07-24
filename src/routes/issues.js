@@ -15,6 +15,11 @@ import {
   fetchIssueListRow,
   fetchTaskBoardRow,
 } from "../services/realtime-patches.js";
+import {
+  briefToDbColumns,
+  readProjectBrief,
+  validateProjectBrief,
+} from "../services/project-brief.js";
 
 function ticketNumber() {
   const date = new Date().toISOString().slice(2, 10).replaceAll("-", "");
@@ -727,13 +732,22 @@ export function registerIssueRoutes(app, deps) {
     const {
       name,
       code,
-      description,
-      prd,
       startDate,
       endDate,
       ownerId,
       memberIds,
     } = req.body;
+    const brief = readProjectBrief({
+      ...req.body,
+      problem: req.body.problem ?? req.body.description ?? issue.description,
+      mainRequirements: req.body.mainRequirements ?? req.body.prd ?? issue.description,
+      extraDetails: req.body.extraDetails ?? (issue.ticket_no ? `ที่มาจาก Ticket: ${issue.ticket_no}` : null),
+    });
+    const briefError = validateProjectBrief(brief);
+    if (briefError) {
+      return res.status(400).json({ message: briefError });
+    }
+    const briefColumns = briefToDbColumns(brief);
     if (!name?.trim() || !code?.trim()) {
       return res.status(400).json({ message: "กรุณาระบุชื่อและรหัสโครงการ" });
     }
@@ -761,20 +775,27 @@ export function registerIssueRoutes(app, deps) {
       await connection.beginTransaction();
       const [result] = await connection.execute(
         `INSERT INTO projects
-          (company_id, name, code, description, prd, status, start_date, end_date,
-           owner_id, approved_by, created_by, budget, currency)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (company_id, name, code, description, prd, objective, problem, expected_outcome,
+           extra_details, main_requirements, business_rules, status, start_date, end_date,
+           owner_id, approved_by, approved_at, created_by, budget, currency)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?)`,
         [
           req.user.companyId,
           name.trim(),
           code.trim().toUpperCase(),
-          description || issue.description || null,
-          prd || issue.description || null,
-          "pending",
+          briefColumns.description,
+          briefColumns.prd,
+          briefColumns.objective,
+          briefColumns.problem,
+          briefColumns.expected_outcome,
+          briefColumns.extra_details,
+          briefColumns.main_requirements,
+          briefColumns.business_rules,
+          "active",
           startDate || null,
           endDate || null,
           owner,
-          null,
+          req.user.id,
           req.user.id,
           0,
           "THB",
