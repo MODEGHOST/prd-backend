@@ -152,17 +152,17 @@ export function registerPublicAuthRoutes(app, deps) {
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
-    const { token, hash } = createOneTimeToken();
-    const verificationUrl =
-      `${frontendUrl}/verify-email?token=${encodeURIComponent(token)}`;
+    // Early-stage: skip email verification gate — mark verified + active on signup.
+    // Membership approval is still required when there is no invitation.
     const conn = await pool.getConnection();
     let userId;
     try {
       await conn.beginTransaction();
       const [result] = await conn.execute(
         `INSERT INTO users
-          (name, first_name, last_name, email, username, telegram_id, password_hash, role, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'requester', 'pending')`,
+          (name, first_name, last_name, email, username, telegram_id, password_hash,
+           role, status, email_verified_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'requester', 'active', NOW())`,
         [
           `${firstName.trim()} ${lastName.trim()}`,
           firstName.trim(),
@@ -215,26 +215,6 @@ export function registerPublicAuthRoutes(app, deps) {
           [userId, invitation.id],
         );
       }
-      await conn.execute(
-        `INSERT INTO email_verification_tokens (user_id, token_hash, expires_at)
-         VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 24 HOUR))`,
-        [userId, hash],
-      );
-      await enqueueOutbox(conn, {
-        companyId: company.id,
-        eventType: "email.send",
-        aggregateType: "user",
-        aggregateId: userId,
-        dedupeKey: `email.verify:${userId}:${hash}`,
-        payload: {
-          to: normalizedEmail,
-          ...verificationEmail({
-            url: verificationUrl,
-            approvalRequired: !invitation,
-          }),
-          developmentUrl: verificationUrl,
-        },
-      });
       await conn.commit();
     } catch (error) {
       await conn.rollback();
@@ -268,8 +248,8 @@ export function registerPublicAuthRoutes(app, deps) {
     res.status(201).json({
       id: userId,
       message: invitation
-        ? "สร้างบัญชีและรับคำเชิญแล้ว กรุณายืนยันอีเมลก่อนเข้าสู่ระบบ"
-        : "สมัครสมาชิกแล้ว กรุณายืนยันอีเมลและรอผู้ดูแลบริษัทอนุมัติ",
+        ? "สร้างบัญชีและรับคำเชิญแล้ว สามารถเข้าสู่ระบบได้เลย"
+        : "สมัครสมาชิกแล้ว กรุณารอผู้ดูแลบริษัทอนุมัติก่อนเข้าสู่ระบบ",
     });
   }));
 
@@ -378,7 +358,6 @@ export function registerPublicAuthRoutes(app, deps) {
        JOIN companies c ON c.id = cm.company_id AND c.is_active = TRUE
        WHERE u.email = ?
          AND u.status <> 'suspended'
-         AND u.email_verified_at IS NOT NULL
        ORDER BY cm.id
        LIMIT 1`,
       [email],
@@ -491,14 +470,10 @@ export function registerPublicAuthRoutes(app, deps) {
     if (!user || !(await bcrypt.compare(password, user.password_hash))) {
       return res.status(401).json({ message: "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" });
     }
-    if (!user.email_verified_at) {
-      return res.status(403).json({
-        code: "EMAIL_NOT_VERIFIED",
-        message: "กรุณายืนยันอีเมลก่อนเข้าสู่ระบบ",
-      });
-    }
-    if (user.status !== "active") {
-      return res.status(403).json({ message: "บัญชียังไม่พร้อมใช้งาน" });
+    // Early-stage: email verification is not required. Allow pending (legacy) accounts;
+    // only suspended accounts are blocked here. Active company membership is still required.
+    if (user.status === "suspended") {
+      return res.status(403).json({ message: "บัญชีถูกระงับการใช้งาน" });
     }
     const [[membership]] = await pool.execute(
       `SELECT cm.company_id

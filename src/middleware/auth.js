@@ -66,8 +66,8 @@ export function createAuth({ pool, jwtSecret, authTokenTtl }) {
        FROM users WHERE id = ?`,
       [claims.id],
     );
-    if (!account || account.status !== "active") throw new Error("inactive account");
-    if (!account.email_verified_at) throw new Error("unverified account");
+    // Early-stage: email verification is not required. Allow pending (legacy) accounts.
+    if (!account || account.status === "suspended") throw new Error("inactive account");
     if (claims.tokenVersion != null
         && Number(claims.tokenVersion) !== Number(account.token_version)) {
       throw new Error("revoked token");

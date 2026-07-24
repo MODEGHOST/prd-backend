@@ -352,7 +352,7 @@ test("database rejects attaching a tenant role to another company", { skip: !ena
   );
 });
 
-test("registration commits its verification email to the durable outbox", { skip: !enabled }, async () => {
+test("registration creates an active account without requiring email verification", { skip: !enabled }, async () => {
   const [[company]] = await pool.execute(
     "SELECT id FROM companies WHERE allow_registration = TRUE AND is_active = TRUE LIMIT 1",
   );
@@ -376,18 +376,25 @@ test("registration commits its verification email to the durable outbox", { skip
   assert.equal(response.status, 201);
   const result = await response.json();
   registeredUserId = Number(result.id);
+  const [[registeredUser]] = await pool.execute(
+    "SELECT status, email_verified_at FROM users WHERE id = ?",
+    [registeredUserId],
+  );
+  assert.equal(registeredUser.status, "active");
+  assert.ok(registeredUser.email_verified_at);
   const [[emailEvent]] = await pool.execute(
     `SELECT id, status
      FROM outbox_events
      WHERE event_type = 'email.send'
        AND aggregate_type = 'user'
-       AND aggregate_id = ?`,
+       AND aggregate_id = ?
+       AND dedupe_key LIKE 'email.verify:%'`,
     [String(registeredUserId)],
   );
-  assert.ok(emailEvent?.id, "verification email was not enqueued");
+  assert.equal(emailEvent, undefined);
 });
 
-test("membership approval cannot bypass email verification", { skip: !enabled }, async () => {
+test("membership approval unlocks login without a separate email verification step", { skip: !enabled }, async () => {
   const admin = await login("admin@projecthub.local");
   const [[membership]] = await pool.execute(
     "SELECT id FROM company_memberships WHERE user_id = ?",
@@ -408,13 +415,6 @@ test("membership approval cannot bypass email verification", { skip: !enabled },
   );
   assert.equal(approvalResponse.status, 200);
 
-  const [[approvedUser]] = await pool.execute(
-    "SELECT status, email_verified_at FROM users WHERE id = ?",
-    [registeredUserId],
-  );
-  assert.equal(approvedUser.status, "pending");
-  assert.equal(approvedUser.email_verified_at, null);
-
   const approvedLogin = await fetch(`${baseUrl}/api/auth/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -423,8 +423,8 @@ test("membership approval cannot bypass email verification", { skip: !enabled },
       password: "Password123!",
     }),
   });
-  assert.equal(approvedLogin.status, 403);
-  assert.equal((await approvedLogin.json()).code, "EMAIL_NOT_VERIFIED");
+  assert.equal(approvedLogin.status, 200);
+  assert.ok((await approvedLogin.json()).token);
 
   const [[beforeReset]] = await pool.execute(
     "SELECT COUNT(*) count FROM password_reset_tokens WHERE user_id = ?",
@@ -440,48 +440,7 @@ test("membership approval cannot bypass email verification", { skip: !enabled },
     "SELECT COUNT(*) count FROM password_reset_tokens WHERE user_id = ?",
     [registeredUserId],
   );
-  assert.equal(Number(afterReset.count), Number(beforeReset.count));
-
-  const [[beforeVerification]] = await pool.execute(
-    "SELECT COUNT(*) count FROM email_verification_tokens WHERE user_id = ?",
-    [registeredUserId],
-  );
-  const [[beforeVerificationOutbox]] = await pool.execute(
-    `SELECT COUNT(*) count FROM outbox_events
-     WHERE aggregate_type = 'user'
-       AND aggregate_id = ?
-       AND dedupe_key LIKE 'email.verify:%'`,
-    [String(registeredUserId)],
-  );
-  const resendResponse = await fetch(`${baseUrl}/api/auth/resend-verification`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email: registeredUserEmail }),
-  });
-  assert.equal(resendResponse.status, 200);
-  const [[afterVerification]] = await pool.execute(
-    "SELECT COUNT(*) count FROM email_verification_tokens WHERE user_id = ?",
-    [registeredUserId],
-  );
-  const [[afterVerificationOutbox]] = await pool.execute(
-    `SELECT COUNT(*) count FROM outbox_events
-     WHERE aggregate_type = 'user'
-       AND aggregate_id = ?
-       AND dedupe_key LIKE 'email.verify:%'`,
-    [String(registeredUserId)],
-  );
-  assert.equal(
-    Number(afterVerification.count),
-    Number(beforeVerification.count) + 1,
-  );
-  assert.equal(
-    Number(afterVerificationOutbox.count),
-    Number(beforeVerificationOutbox.count) + 1,
-  );
-  await pool.execute(
-    "UPDATE users SET email_verified_at = NOW(), status = 'active' WHERE id = ?",
-    [registeredUserId],
-  );
+  assert.equal(Number(afterReset.count), Number(beforeReset.count) + 1);
 });
 
 test("developers see all tickets but unrelated assigned tickets are read-only", { skip: !enabled }, async () => {

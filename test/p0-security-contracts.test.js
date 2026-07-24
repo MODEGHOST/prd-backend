@@ -51,9 +51,9 @@ test("company switching depends on active membership, not a role permission", ()
   assert.match(publicAuth, /const switched = await loadSession/);
 });
 
-test("unverified accounts cannot receive or reuse an authenticated session", () => {
-  assert.match(publicAuth, /if \(!user\.email_verified_at\)/);
-  assert.match(authMiddleware, /if \(!account\.email_verified_at\)/);
+test("early-stage auth does not gate sessions on email verification", () => {
+  assert.doesNotMatch(publicAuth, /if \(!user\.email_verified_at\)/);
+  assert.doesNotMatch(authMiddleware, /if \(!account\.email_verified_at\)/);
   assert.doesNotMatch(
     memberships,
     /UPDATE users SET status = 'active' WHERE id = \? AND status = 'pending'/,
