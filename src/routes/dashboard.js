@@ -285,6 +285,11 @@ export function registerDashboardRoutes(app, deps) {
       ticketValues.push(dateTo);
     }
 
+    const sortMode = req.query.sort === "due"
+      ? "due"
+      : req.query.sort === "workload"
+        ? "workload"
+        : "updated";
     const countParts = [];
     const countValues = [];
     const dataParts = [];
@@ -293,47 +298,77 @@ export function registerDashboardRoutes(app, deps) {
       const where = projectWhere.join(" AND ");
       countParts.push(`SELECT p.id FROM projects p WHERE ${where}`);
       countValues.push(...projectValues);
-      dataParts.push(
-        `SELECT 'project' kind, p.id, p.code, NULL ticket_no, p.name title,
-                p.status, NULL priority, NULL board_status, NULL description, NULL due_date,
-                NULL project_name, owner.name assignee_name,
-                p.owner_id, p.created_by, NULL assignee_id,
-                EXISTS (
-                  SELECT 1 FROM project_members participant
-                  WHERE participant.project_id = p.id AND participant.user_id = ?
-                ) issue_participant,
-                COALESCE(p.end_date, p.start_date, DATE(p.created_at)) item_date,
-                p.created_at updated_at,
-                COALESCE(task_stats.standalone_total, 0)
-                  + COALESCE(issue_stats.issue_count, 0) work_total,
-                COALESCE(task_stats.standalone_done, 0)
-                  + COALESCE(issue_stats.issue_closed, 0) work_done,
-                COALESCE(task_stats.standalone_open, 0)
-                  + COALESCE(issue_stats.issue_open, 0) remaining
-         FROM projects p
-         JOIN users owner ON owner.id = p.owner_id
-         LEFT JOIN (
-           SELECT t.project_id,
-                  SUM(t.issue_id IS NULL) standalone_total,
-                  SUM(t.issue_id IS NULL AND t.status = 'done') standalone_done,
-                  SUM(t.issue_id IS NULL AND t.status <> 'done') standalone_open
-           FROM tasks t
-           JOIN projects scoped ON scoped.id = t.project_id
-           WHERE scoped.company_id = ?
-           GROUP BY t.project_id
-         ) task_stats ON task_stats.project_id = p.id
-         LEFT JOIN (
-           SELECT i.project_id,
-                  COUNT(*) issue_count,
-                  SUM(i.status = 'closed') issue_closed,
-                  SUM(i.status <> 'closed') issue_open
-           FROM issues i
-           WHERE i.company_id = ? AND i.project_id IS NOT NULL
-           GROUP BY i.project_id
-         ) issue_stats ON issue_stats.project_id = p.id
-         WHERE ${where}`,
-      );
-      dataValues.push(req.user.id, req.user.companyId, req.user.companyId, ...projectValues);
+      if (sortMode === "workload") {
+        // Need remaining in SQL for correct ORDER BY + pagination.
+        // Scope aggregates to matching projects only (not whole company).
+        dataParts.push(
+          `SELECT 'project' kind, p.id, p.code, NULL ticket_no, p.name title,
+                  p.status, NULL priority, NULL board_status, NULL description, NULL due_date,
+                  NULL project_name, owner.name assignee_name,
+                  p.owner_id, p.created_by, NULL assignee_id,
+                  EXISTS (
+                    SELECT 1 FROM project_members participant
+                    WHERE participant.project_id = p.id AND participant.user_id = ?
+                  ) issue_participant,
+                  COALESCE(p.end_date, p.start_date, DATE(p.created_at)) item_date,
+                  p.created_at updated_at,
+                  COALESCE(task_stats.standalone_total, 0)
+                    + COALESCE(issue_stats.issue_count, 0) work_total,
+                  COALESCE(task_stats.standalone_done, 0)
+                    + COALESCE(issue_stats.issue_closed, 0) work_done,
+                  COALESCE(task_stats.standalone_open, 0)
+                    + COALESCE(issue_stats.issue_open, 0) remaining
+           FROM projects p
+           JOIN users owner ON owner.id = p.owner_id
+           LEFT JOIN (
+             SELECT t.project_id,
+                    SUM(t.issue_id IS NULL) standalone_total,
+                    SUM(t.issue_id IS NULL AND t.status = 'done') standalone_done,
+                    SUM(t.issue_id IS NULL AND t.status <> 'done') standalone_open
+             FROM tasks t
+             WHERE t.project_id IN (SELECT filtered.id FROM projects filtered WHERE ${where})
+             GROUP BY t.project_id
+           ) task_stats ON task_stats.project_id = p.id
+           LEFT JOIN (
+             SELECT i.project_id,
+                    COUNT(*) issue_count,
+                    SUM(i.status = 'closed') issue_closed,
+                    SUM(i.status <> 'closed') issue_open
+             FROM issues i
+             WHERE i.company_id = ?
+               AND i.project_id IN (SELECT filtered.id FROM projects filtered WHERE ${where})
+             GROUP BY i.project_id
+           ) issue_stats ON issue_stats.project_id = p.id
+           WHERE ${where}`,
+        );
+        dataValues.push(
+          req.user.id,
+          ...projectValues,
+          req.user.companyId,
+          ...projectValues,
+          ...projectValues,
+        );
+      } else {
+        dataParts.push(
+          `SELECT 'project' kind, p.id, p.code, NULL ticket_no, p.name title,
+                  p.status, NULL priority, NULL board_status, NULL description, NULL due_date,
+                  NULL project_name, owner.name assignee_name,
+                  p.owner_id, p.created_by, NULL assignee_id,
+                  EXISTS (
+                    SELECT 1 FROM project_members participant
+                    WHERE participant.project_id = p.id AND participant.user_id = ?
+                  ) issue_participant,
+                  COALESCE(p.end_date, p.start_date, DATE(p.created_at)) item_date,
+                  p.created_at updated_at,
+                  0 work_total,
+                  0 work_done,
+                  0 remaining
+           FROM projects p
+           JOIN users owner ON owner.id = p.owner_id
+           WHERE ${where}`,
+        );
+        dataValues.push(req.user.id, ...projectValues);
+      }
     }
     if (includeTickets) {
       const where = ticketWhere.join(" AND ");
@@ -367,9 +402,9 @@ export function registerDashboardRoutes(app, deps) {
       `SELECT COUNT(*) total FROM (${countParts.join(" UNION ALL ")}) overview_count`,
       countValues,
     );
-    const orderBy = req.query.sort === "due"
+    const orderBy = sortMode === "due"
       ? "item_date IS NULL, item_date ASC, updated_at DESC"
-      : req.query.sort === "workload"
+      : sortMode === "workload"
         ? "remaining DESC, updated_at DESC"
         : "updated_at DESC";
     const [rows] = await pool.execute(
@@ -378,15 +413,81 @@ export function registerDashboardRoutes(app, deps) {
        LIMIT ${pagination.limit} OFFSET ${pagination.offset}`,
       dataValues,
     );
+
+    const projectIds = sortMode === "workload"
+      ? []
+      : rows
+        .filter((row) => row.kind === "project")
+        .map((row) => Number(row.id))
+        .filter((id) => Number.isInteger(id) && id > 0);
+    const workByProject = new Map();
+    if (projectIds.length) {
+      const placeholders = projectIds.map(() => "?").join(",");
+      const [[taskStats], [issueStats]] = await Promise.all([
+        pool.execute(
+          `SELECT t.project_id,
+                  SUM(t.issue_id IS NULL) standalone_total,
+                  SUM(t.issue_id IS NULL AND t.status = 'done') standalone_done,
+                  SUM(t.issue_id IS NULL AND t.status <> 'done') standalone_open
+           FROM tasks t
+           WHERE t.project_id IN (${placeholders})
+           GROUP BY t.project_id`,
+          projectIds,
+        ),
+        pool.execute(
+          `SELECT i.project_id,
+                  COUNT(*) issue_count,
+                  SUM(i.status = 'closed') issue_closed,
+                  SUM(i.status <> 'closed') issue_open
+           FROM issues i
+           WHERE i.company_id = ? AND i.project_id IN (${placeholders})
+           GROUP BY i.project_id`,
+          [req.user.companyId, ...projectIds],
+        ),
+      ]);
+      for (const id of projectIds) {
+        workByProject.set(id, {
+          work_total: 0,
+          work_done: 0,
+          remaining: 0,
+        });
+      }
+      for (const row of taskStats) {
+        const id = Number(row.project_id);
+        const current = workByProject.get(id) || { work_total: 0, work_done: 0, remaining: 0 };
+        current.work_total += Number(row.standalone_total || 0);
+        current.work_done += Number(row.standalone_done || 0);
+        current.remaining += Number(row.standalone_open || 0);
+        workByProject.set(id, current);
+      }
+      for (const row of issueStats) {
+        const id = Number(row.project_id);
+        const current = workByProject.get(id) || { work_total: 0, work_done: 0, remaining: 0 };
+        current.work_total += Number(row.issue_count || 0);
+        current.work_done += Number(row.issue_closed || 0);
+        current.remaining += Number(row.issue_open || 0);
+        workByProject.set(id, current);
+      }
+    }
+
     paginatedJson(
       res,
-      rows.map((row) => ({
-        ...row,
-        issue_participant: Boolean(row.issue_participant),
-        work_total: Number(row.work_total || 0),
-        work_done: Number(row.work_done || 0),
-        remaining: Number(row.remaining || 0),
-      })),
+      rows.map((row) => {
+        const stats = row.kind === "project" && workByProject.has(Number(row.id))
+          ? workByProject.get(Number(row.id))
+          : {
+            work_total: Number(row.work_total || 0),
+            work_done: Number(row.work_done || 0),
+            remaining: Number(row.remaining || 0),
+          };
+        return {
+          ...row,
+          issue_participant: Boolean(row.issue_participant),
+          work_total: Number(stats.work_total || 0),
+          work_done: Number(stats.work_done || 0),
+          remaining: Number(stats.remaining || 0),
+        };
+      }),
       Number(total || 0),
       pagination,
     );

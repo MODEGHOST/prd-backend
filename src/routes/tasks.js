@@ -34,7 +34,7 @@ export function registerTaskRoutes(app, deps) {
 
   app.get("/api/tasks", auth, wrap(async (req, res) => {
     if (isRequesterPersona(req.user)) {
-      const pagination = parsePagination(req, { defaultLimit: 200, maxLimit: 500 });
+      const pagination = parsePagination(req, { defaultLimit: 100, maxLimit: 200 });
       return paginatedJson(res, [], 0, pagination);
     }
     const values = [];
@@ -108,7 +108,7 @@ export function registerTaskRoutes(app, deps) {
       filter += " AND t.due_date IS NOT NULL AND t.due_date < CURDATE() AND t.status <> 'done'";
     }
 
-    const pagination = parsePagination(req, { defaultLimit: 200, maxLimit: 500 });
+    const pagination = parsePagination(req, { defaultLimit: 100, maxLimit: 200 });
     const [[{ total }]] = await pool.execute(
       `SELECT COUNT(*) total FROM tasks t ${filter}`,
       values,

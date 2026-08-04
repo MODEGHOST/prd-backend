@@ -1,6 +1,7 @@
 import "./core/load-env.js";
 import "./core/node16-compat.js";
 import express from "express";
+import compression from "compression";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import helmet from "helmet";
@@ -84,6 +85,7 @@ export function createApplication(options = {}) {
   });
 
   app.use(helmet());
+  app.use(compression({ threshold: 1024 }));
   app.use(cors({
     origin: [
       config.frontendUrl,

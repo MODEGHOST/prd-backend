@@ -8,8 +8,8 @@ import { wrap } from "./async-handler.js";
 export const JWT_SIGN_OPTIONS = Object.freeze({ algorithm: "HS256" });
 export const JWT_VERIFY_OPTIONS = Object.freeze({ algorithms: ["HS256"] });
 
-const SESSION_CACHE_TTL_MS = 5_000;
-const SESSION_CACHE_MAX = 500;
+const SESSION_CACHE_TTL_MS = 45_000;
+const SESSION_CACHE_MAX = 2_000;
 
 export function createAuth({ pool, jwtSecret, authTokenTtl, config }) {
   const sessionCache = new Map();

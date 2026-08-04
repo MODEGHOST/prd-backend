@@ -1,13 +1,15 @@
 import { createReadStream } from "node:fs";
-import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { mkdir, unlink } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import {
   INLINE_IMAGE_TYPES,
+  areUploadedFilesValid,
   attachmentRoot,
+  commitUploadedFile,
   createAttachmentUpload,
+  discardUploadedFiles,
   safeDisplayName,
   storagePath,
-  validAttachment,
 } from "../core/attachments.js";
 import {
   emitWeeklyPlanChanged,
@@ -19,6 +21,7 @@ import {
   readProjectBrief,
   validateProjectBrief,
 } from "../services/project-brief.js";
+import { allocateProjectCode } from "../core/project-code.js";
 
 function optionalReplyId(value) {
   if (value === undefined || value === null || value === "") return null;
@@ -179,7 +182,6 @@ export function registerProjectRoutes(app, deps) {
   app.post("/api/projects", auth, requirePermission("projects.create"), wrap(async (req, res) => {
     const {
       name,
-      code,
       startDate,
       endDate,
       ownerId,
@@ -191,56 +193,65 @@ export function registerProjectRoutes(app, deps) {
       return res.status(400).json({ message: briefError });
     }
     const briefColumns = briefToDbColumns(brief);
-  
-    if (!name || !code) {
-      return res.status(400).json({ message: "กรุณาระบุชื่อและรหัสโครงการ" });
+
+    if (!name) {
+      return res.status(400).json({ message: "กรุณาระบุชื่อโครงการ" });
     }
-  
+
     const owner = Number(ownerId || req.user.id);
     if (!Number.isInteger(owner) || owner <= 0) {
       return res.status(400).json({ message: "ownerId ไม่ถูกต้อง" });
     }
-  
+
     const extraMembers = uniquePositiveIds(memberIds).filter((id) => id !== owner && id !== req.user.id);
     const allUserIds = uniquePositiveIds([owner, req.user.id, ...extraMembers]);
     if (!(await usersExist(allUserIds, req.user.companyId))) {
       return res.status(400).json({ message: "พบผู้ใช้ที่ไม่ถูกต้องในสมาชิกโครงการ" });
     }
-  
+
     const conn = await pool.getConnection();
     let projectId;
+    let projectCode;
     try {
       await conn.beginTransaction();
-      const [result] = await conn.execute(
-        `INSERT INTO projects
-          (company_id, name, code, description, prd, objective, problem, expected_outcome,
-           extra_details, main_requirements, business_rules, status, start_date, end_date,
-           owner_id, approved_by, approved_at, created_by, budget, currency)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?)`,
-        [
-          req.user.companyId,
-          name,
-          String(code).toUpperCase(),
-          briefColumns.description,
-          briefColumns.prd,
-          briefColumns.objective,
-          briefColumns.problem,
-          briefColumns.expected_outcome,
-          briefColumns.extra_details,
-          briefColumns.main_requirements,
-          briefColumns.business_rules,
-          "active",
-          startDate || null,
-          endDate || null,
-          owner,
-          req.user.id,
-          req.user.id,
-          0,
-          "THB",
-        ],
-      );
-      projectId = result.insertId;
-  
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        projectCode = await allocateProjectCode(conn, req.user.companyId);
+        try {
+          const [result] = await conn.execute(
+            `INSERT INTO projects
+              (company_id, name, code, description, prd, objective, problem, expected_outcome,
+               extra_details, main_requirements, business_rules, status, start_date, end_date,
+               owner_id, approved_by, approved_at, created_by, budget, currency)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?)`,
+            [
+              req.user.companyId,
+              name,
+              projectCode,
+              briefColumns.description,
+              briefColumns.prd,
+              briefColumns.objective,
+              briefColumns.problem,
+              briefColumns.expected_outcome,
+              briefColumns.extra_details,
+              briefColumns.main_requirements,
+              briefColumns.business_rules,
+              "active",
+              startDate || null,
+              endDate || null,
+              owner,
+              req.user.id,
+              req.user.id,
+              0,
+              "THB",
+            ],
+          );
+          projectId = result.insertId;
+          break;
+        } catch (error) {
+          if (error.code !== "ER_DUP_ENTRY" || attempt === 3) throw error;
+        }
+      }
+
       await ensureProjectMember(conn, projectId, req.user.id, "Creator");
       await ensureProjectMember(
         conn,
@@ -248,8 +259,19 @@ export function registerProjectRoutes(app, deps) {
         owner,
         owner === req.user.id ? "Creator / Owner" : "Project owner",
       );
-      for (const memberId of extraMembers) {
-        await ensureProjectMember(conn, projectId, memberId, null);
+      if (extraMembers.length) {
+        const values = [];
+        const placeholders = extraMembers.map((memberId) => {
+          values.push(projectId, memberId, null);
+          return "(?, ?, ?)";
+        }).join(", ");
+        await conn.execute(
+          `INSERT INTO project_members (project_id, user_id, responsibility)
+           VALUES ${placeholders}
+           ON DUPLICATE KEY UPDATE
+             responsibility = COALESCE(VALUES(responsibility), responsibility)`,
+          values,
+        );
       }
       await conn.commit();
     } catch (error) {
@@ -258,14 +280,14 @@ export function registerProjectRoutes(app, deps) {
     } finally {
       conn.release();
     }
-  
+
     const notifyIds = uniquePositiveIds([owner, ...extraMembers])
       .filter((id) => id !== req.user.id);
     await Promise.all(notifyIds.map((userId) =>
       notify(
         userId,
         "เพิ่มเข้าโครงการ",
-        `คุณถูกเพิ่มเข้าโครงการ ${name} (${String(code).toUpperCase()})`,
+        `คุณถูกเพิ่มเข้าโครงการ ${name} (${projectCode})`,
         {
           targetUrl: `/projects/${projectId}`,
           entityType: "project",
@@ -273,8 +295,8 @@ export function registerProjectRoutes(app, deps) {
         },
       ),
     ));
-  
-    res.status(201).json({ id: projectId, message: "สร้างโครงการเรียบร้อย" });
+
+    res.status(201).json({ id: projectId, code: projectCode, message: "สร้างโครงการเรียบร้อย" });
   }));
   
   app.get("/api/projects/:id", auth, wrap(async (req, res) => {
@@ -589,11 +611,17 @@ export function registerProjectRoutes(app, deps) {
       await conn.beginTransaction();
       await conn.execute("UPDATE projects SET owner_id = ? WHERE id = ?", [ownerId, projectId]);
       await conn.execute("DELETE FROM project_members WHERE project_id = ?", [projectId]);
-      for (const [userId, responsibility] of memberMap.entries()) {
+      const memberEntries = [...memberMap.entries()];
+      if (memberEntries.length) {
+        const values = [];
+        const placeholders = memberEntries.map(([userId, responsibility]) => {
+          values.push(projectId, userId, responsibility);
+          return "(?, ?, ?)";
+        }).join(", ");
         await conn.execute(
           `INSERT INTO project_members (project_id, user_id, responsibility)
-           VALUES (?, ?, ?)`,
-          [projectId, userId, responsibility],
+           VALUES ${placeholders}`,
+          values,
         );
       }
       await conn.commit();
@@ -984,7 +1012,7 @@ export function registerProjectRoutes(app, deps) {
     if (access === null) return res.status(404).json({ message: "ไม่พบโครงการ" });
     if (!access) return res.status(403).json({ message: "คุณไม่มีสิทธิ์เข้าถึงโครงการนี้" });
   
-    const pagination = parsePagination(req, { defaultLimit: 200, maxLimit: 500 });
+    const pagination = parsePagination(req, { defaultLimit: 50, maxLimit: 100 });
     const [[{ total }]] = await pool.execute(
       "SELECT COUNT(*) total FROM project_messages WHERE project_id = ?",
       [projectId],
@@ -1051,13 +1079,23 @@ export function registerProjectRoutes(app, deps) {
     requirePermission("projects.chat"),
     upload.array("files", config.attachments.maxFiles),
     wrap(async (req, res) => {
+      const files = req.files || [];
       const projectId = Number(req.params.id);
       const access = await canAccessProject(req.user, projectId);
-      if (access === null) return res.status(404).json({ message: "ไม่พบโครงการ" });
-      if (!access) return res.status(403).json({ message: "คุณไม่มีสิทธิ์เข้าถึงโครงการนี้" });
+      if (access === null) {
+        await discardUploadedFiles(files);
+        return res.status(404).json({ message: "ไม่พบโครงการ" });
+      }
+      if (!access) {
+        await discardUploadedFiles(files);
+        return res.status(403).json({ message: "คุณไม่มีสิทธิ์เข้าถึงโครงการนี้" });
+      }
 
       const project = await getProjectById(projectId, req.user.companyId);
-      if (!project) return res.status(404).json({ message: "ไม่พบโครงการ" });
+      if (!project) {
+        await discardUploadedFiles(files);
+        return res.status(404).json({ message: "ไม่พบโครงการ" });
+      }
       const boardGate = await getProjectBoardGate(pool, projectId);
       const [[work]] = await pool.execute(
         `SELECT
@@ -1079,21 +1117,23 @@ export function registerProjectRoutes(app, deps) {
       const workDone = Number(work?.done || 0);
       const workComplete = workTotal > 0 && workDone >= workTotal;
       if (boardGate.boardLocked || workComplete || project.status === "completed") {
+        await discardUploadedFiles(files);
         return res.status(409).json({
           message: "งานทั้งหมดเสร็จสิ้นแล้ว ไม่สามารถส่งข้อความในแชททีมได้อีก",
         });
       }
 
-      const files = req.files || [];
       const body = String(req.body?.body || "").trim();
       const replyToId = optionalReplyId(req.body?.replyToId);
       if (Number.isNaN(replyToId)) {
+        await discardUploadedFiles(files);
         return res.status(400).json({ message: "replyToId ต้องเป็นจำนวนเต็มบวก" });
       }
       if (!body && !files.length) {
         return res.status(400).json({ message: "กรุณากรอกข้อความหรือแนบไฟล์" });
       }
-      if (files.some((file) => !validAttachment(file))) {
+      if (!(await areUploadedFilesValid(files))) {
+        await discardUploadedFiles(files);
         return res.status(415).json({
           message: "รองรับเฉพาะ JPG, PNG, GIF, WebP, PDF และ TXT ที่ชนิดไฟล์ตรงกับนามสกุล",
         });
@@ -1120,6 +1160,7 @@ export function registerProjectRoutes(app, deps) {
           [req.user.companyId, req.user.companyId, replyToId, projectId],
         );
         if (!parent) {
+          await discardUploadedFiles(files);
           return res.status(404).json({
             message: "ไม่พบข้อความต้นทางในแชทโครงการนี้",
           });
@@ -1151,7 +1192,7 @@ export function registerProjectRoutes(app, deps) {
         for (const file of files) {
           const storageName = randomBytes(24).toString("hex");
           const target = storagePath(projectAttachmentRoot, storageName);
-          await writeFile(target, file.buffer, { flag: "wx", mode: 0o600 });
+          await commitUploadedFile(file, target);
           stored.push(target);
           const originalName = safeDisplayName(file.originalname);
           const [attachmentResult] = await connection.execute(
@@ -1185,6 +1226,7 @@ export function registerProjectRoutes(app, deps) {
       } catch (error) {
         await connection.rollback();
         await Promise.all(stored.map((target) => unlink(target).catch(() => {})));
+        await discardUploadedFiles(files);
         throw error;
       } finally {
         connection.release();

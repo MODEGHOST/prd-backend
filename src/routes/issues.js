@@ -1,13 +1,15 @@
 import { createReadStream } from "node:fs";
-import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { mkdir, unlink } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import {
   INLINE_IMAGE_TYPES,
+  areUploadedFilesValid,
   attachmentRoot,
+  commitUploadedFile,
   createAttachmentUpload,
+  discardUploadedFiles,
   safeDisplayName,
   storagePath,
-  validAttachment,
 } from "../core/attachments.js";
 import {
   emitIssueChanged,
@@ -20,6 +22,7 @@ import {
   readProjectBrief,
   validateProjectBrief,
 } from "../services/project-brief.js";
+import { allocateProjectCode } from "../core/project-code.js";
 
 function ticketNumber() {
   const date = new Date().toISOString().slice(2, 10).replaceAll("-", "");
@@ -731,7 +734,6 @@ export function registerIssueRoutes(app, deps) {
   
     const {
       name,
-      code,
       startDate,
       endDate,
       ownerId,
@@ -748,8 +750,8 @@ export function registerIssueRoutes(app, deps) {
       return res.status(400).json({ message: briefError });
     }
     const briefColumns = briefToDbColumns(brief);
-    if (!name?.trim() || !code?.trim()) {
-      return res.status(400).json({ message: "กรุณาระบุชื่อและรหัสโครงการ" });
+    if (!name?.trim()) {
+      return res.status(400).json({ message: "กรุณาระบุชื่อโครงการ" });
     }
     const owner = Number(ownerId || issue.assignee_id || req.user.id);
     if (!Number.isInteger(owner) || owner <= 0) {
@@ -768,40 +770,49 @@ export function registerIssueRoutes(app, deps) {
     if (!(await usersExist(allUserIds, req.user.companyId))) {
       return res.status(400).json({ message: "พบผู้ใช้ที่ไม่ถูกต้องในสมาชิกโครงการ" });
     }
-  
+
     const connection = await pool.getConnection();
     let projectId;
+    let projectCode;
     try {
       await connection.beginTransaction();
-      const [result] = await connection.execute(
-        `INSERT INTO projects
-          (company_id, name, code, description, prd, objective, problem, expected_outcome,
-           extra_details, main_requirements, business_rules, status, start_date, end_date,
-           owner_id, approved_by, approved_at, created_by, budget, currency)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?)`,
-        [
-          req.user.companyId,
-          name.trim(),
-          code.trim().toUpperCase(),
-          briefColumns.description,
-          briefColumns.prd,
-          briefColumns.objective,
-          briefColumns.problem,
-          briefColumns.expected_outcome,
-          briefColumns.extra_details,
-          briefColumns.main_requirements,
-          briefColumns.business_rules,
-          "active",
-          startDate || null,
-          endDate || null,
-          owner,
-          req.user.id,
-          req.user.id,
-          0,
-          "THB",
-        ],
-      );
-      projectId = result.insertId;
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        projectCode = await allocateProjectCode(connection, req.user.companyId);
+        try {
+          const [result] = await connection.execute(
+            `INSERT INTO projects
+              (company_id, name, code, description, prd, objective, problem, expected_outcome,
+               extra_details, main_requirements, business_rules, status, start_date, end_date,
+               owner_id, approved_by, approved_at, created_by, budget, currency)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?)`,
+            [
+              req.user.companyId,
+              name.trim(),
+              projectCode,
+              briefColumns.description,
+              briefColumns.prd,
+              briefColumns.objective,
+              briefColumns.problem,
+              briefColumns.expected_outcome,
+              briefColumns.extra_details,
+              briefColumns.main_requirements,
+              briefColumns.business_rules,
+              "active",
+              startDate || null,
+              endDate || null,
+              owner,
+              req.user.id,
+              req.user.id,
+              0,
+              "THB",
+            ],
+          );
+          projectId = result.insertId;
+          break;
+        } catch (error) {
+          if (error.code !== "ER_DUP_ENTRY" || attempt === 3) throw error;
+        }
+      }
       await ensureProjectMember(connection, projectId, req.user.id, "Creator");
       await ensureProjectMember(
         connection,
@@ -869,7 +880,7 @@ export function registerIssueRoutes(app, deps) {
         issue.id,
         req.user.id,
         "converted_to_project",
-        `สร้างเป็นโครงการ ${name.trim()} (${code.trim().toUpperCase()})`,
+        `สร้างเป็นโครงการ ${name.trim()} (${projectCode})`,
       );
       if (estimatedFromProject) {
         await addIssueActivity(
@@ -905,6 +916,7 @@ export function registerIssueRoutes(app, deps) {
     res.status(201).json({
       id: projectId,
       projectId,
+      code: projectCode,
       message: "สร้างโครงการจาก Ticket เรียบร้อย",
     });
   }));
@@ -1403,15 +1415,20 @@ export function registerIssueRoutes(app, deps) {
     auth,
     upload.array("files", config.attachments.maxFiles),
     wrap(async (req, res) => {
+      const files = req.files || [];
       const issue = await getIssueById(req.params.id, req.user.companyId);
-      if (!issue) return res.status(404).json({ message: "ไม่พบ Ticket" });
+      if (!issue) {
+        await discardUploadedFiles(files);
+        return res.status(404).json({ message: "ไม่พบ Ticket" });
+      }
       if (!(await canViewIssue(req.user, issue))
           || !(await canMutateAttachments(req.user, issue))) {
+        await discardUploadedFiles(files);
         return res.status(403).json({ message: "คุณไม่มีสิทธิ์แนบไฟล์ใน Ticket นี้" });
       }
-      const files = req.files || [];
       if (!files.length) return res.status(400).json({ message: "กรุณาเลือกไฟล์" });
-      if (files.some((file) => !validAttachment(file))) {
+      if (!(await areUploadedFilesValid(files))) {
+        await discardUploadedFiles(files);
         return res.status(415).json({
           message: "รองรับเฉพาะ JPG, PNG, GIF, WebP, PDF และ TXT ที่ชนิดไฟล์ตรงกับนามสกุล",
         });
@@ -1421,6 +1438,7 @@ export function registerIssueRoutes(app, deps) {
         [issue.id],
       );
       if (Number(total) + files.length > config.attachments.maxFiles) {
+        await discardUploadedFiles(files);
         return res.status(413).json({
           message: `แนบไฟล์ได้ไม่เกิน ${config.attachments.maxFiles} ไฟล์ต่อ Ticket`,
         });
@@ -1441,6 +1459,7 @@ export function registerIssueRoutes(app, deps) {
             || isTerminalIssue(lockedIssue)
             || (requesterUpload && (lockedIssue.status !== "open" || lockedIssue.assignee_id))) {
           await connection.rollback();
+          await discardUploadedFiles(files);
           return res.status(409).json({ message: "คำขอนี้ไม่อนุญาตให้แก้ไขไฟล์แนบแล้ว" });
         }
         const [[{ locked_total: lockedTotal }]] = await connection.execute(
@@ -1449,6 +1468,7 @@ export function registerIssueRoutes(app, deps) {
         );
         if (Number(lockedTotal) + files.length > config.attachments.maxFiles) {
           await connection.rollback();
+          await discardUploadedFiles(files);
           return res.status(413).json({
             message: `แนบไฟล์ได้ไม่เกิน ${config.attachments.maxFiles} ไฟล์ต่อ Ticket`,
           });
@@ -1456,7 +1476,7 @@ export function registerIssueRoutes(app, deps) {
         for (const file of files) {
           const storageName = randomBytes(24).toString("hex");
           const target = storagePath(issueAttachmentRoot, storageName);
-          await writeFile(target, file.buffer, { flag: "wx", mode: 0o600 });
+          await commitUploadedFile(file, target);
           stored.push(target);
           await connection.execute(
             `INSERT INTO issue_attachments
@@ -1477,6 +1497,7 @@ export function registerIssueRoutes(app, deps) {
       } catch (error) {
         await connection.rollback();
         await Promise.all(stored.map((target) => unlink(target).catch(() => {})));
+        await discardUploadedFiles(files);
         throw error;
       } finally {
         connection.release();
@@ -1568,7 +1589,7 @@ export function registerIssueRoutes(app, deps) {
     if (!(await canViewIssue(req.user, issue))) {
       return res.status(403).json({ message: "คุณไม่มีสิทธิ์ดู Ticket นี้" });
     }
-    const pagination = parsePagination(req, { defaultLimit: 200, maxLimit: 500 });
+    const pagination = parsePagination(req, { defaultLimit: 50, maxLimit: 100 });
     const [[{ total }]] = await pool.execute(
       "SELECT COUNT(*) total FROM comments WHERE issue_id = ?",
       [req.params.id],
@@ -1639,25 +1660,32 @@ export function registerIssueRoutes(app, deps) {
       const commentBody = String(req.body?.body || "").trim();
       const replyToId = optionalReplyId(req.body?.replyToId);
       if (Number.isNaN(replyToId)) {
+        await discardUploadedFiles(files);
         return res.status(400).json({ message: "replyToId ต้องเป็นจำนวนเต็มบวก" });
       }
       if (!commentBody && !files.length) {
         return res.status(400).json({ message: "กรุณากรอกข้อความหรือแนบไฟล์" });
       }
-      if (files.some((file) => !validAttachment(file))) {
+      if (!(await areUploadedFilesValid(files))) {
+        await discardUploadedFiles(files);
         return res.status(415).json({
           message: "รองรับเฉพาะ JPG, PNG, GIF, WebP, PDF และ TXT ที่ชนิดไฟล์ตรงกับนามสกุล",
         });
       }
       const issue = await getIssueById(req.params.id, req.user.companyId);
-      if (!issue) return res.status(404).json({ message: "ไม่พบ Ticket" });
+      if (!issue) {
+        await discardUploadedFiles(files);
+        return res.status(404).json({ message: "ไม่พบ Ticket" });
+      }
       if (isTerminalIssue(issue)) {
+        await discardUploadedFiles(files);
         return res.status(409).json({ message: "Ticket นี้ปิดแล้ว แชทเป็นแบบอ่านอย่างเดียว" });
       }
       const participant = hasPermission(req.user, "issues.manage_all")
         || await isIssueParticipant(req.params.id, req.user.id);
       const isRequester = Number(issue.requester_id) === Number(req.user.id);
       if (!participant && !isRequester) {
+        await discardUploadedFiles(files);
         return res.status(403).json({ message: "คุณไม่ได้อยู่ใน Ticket นี้" });
       }
 
@@ -1681,6 +1709,7 @@ export function registerIssueRoutes(app, deps) {
           [req.user.companyId, req.user.companyId, replyToId, issue.id],
         );
         if (!parent) {
+          await discardUploadedFiles(files);
           return res.status(404).json({
             message: "ไม่พบข้อความต้นทางในบทสนทนา Ticket นี้",
           });
@@ -1709,7 +1738,7 @@ export function registerIssueRoutes(app, deps) {
         for (const file of files) {
           const storageName = randomBytes(24).toString("hex");
           const target = storagePath(issueAttachmentRoot, storageName);
-          await writeFile(target, file.buffer, { flag: "wx", mode: 0o600 });
+          await commitUploadedFile(file, target);
           stored.push(target);
           const originalName = safeDisplayName(file.originalname);
           const [attachmentResult] = await connection.execute(
@@ -1743,6 +1772,7 @@ export function registerIssueRoutes(app, deps) {
       } catch (error) {
         await connection.rollback();
         await Promise.all(stored.map((target) => unlink(target).catch(() => {})));
+        await discardUploadedFiles(files);
         throw error;
       } finally {
         connection.release();

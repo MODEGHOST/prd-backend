@@ -32,7 +32,9 @@ test("project messages accept JSON or multipart body-or-files transactionally", 
   )?.[0] || "";
   assert.match(route, /upload\.array\("files", config\.attachments\.maxFiles\)/);
   assert.match(route, /!body && !files\.length/);
-  assert.match(route, /validAttachment/);
+  assert.match(route, /areUploadedFilesValid/);
+  assert.match(route, /commitUploadedFile/);
+  assert.match(route, /discardUploadedFiles/);
   assert.match(route, /beginTransaction/);
   assert.match(route, /company_id = \? FOR UPDATE/);
   assert.match(route, /INSERT INTO project_message_attachments/);

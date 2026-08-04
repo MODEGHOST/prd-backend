@@ -45,9 +45,18 @@ export function createProjectIssueSyncService() {
        ORDER BY u.name`,
       [issue.project_id, issue.assignee_id || 0],
     );
-    for (const row of rows) {
-      await ensureIssueMember(conn, issue.id, row.user_id, actorId || issue.assignee_id || row.user_id);
-    }
+    if (!rows.length) return [];
+    const values = [];
+    const placeholders = rows.map((row) => {
+      values.push(issue.id, row.user_id, actorId || issue.assignee_id || row.user_id);
+      return "(?, ?, ?)";
+    }).join(", ");
+    await conn.execute(
+      `INSERT INTO issue_members (issue_id, user_id, added_by)
+       VALUES ${placeholders}
+       ON DUPLICATE KEY UPDATE added_by = VALUES(added_by)`,
+      values,
+    );
     return rows;
   }
 
