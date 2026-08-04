@@ -70,7 +70,10 @@ test("company role hierarchy protects owner and admin peers", () => {
   const groupAdmin = { roles: ["group_admin"] };
   const legacyOwner = { roles: ["company_owner"] };
   const admin = { roles: ["company_admin"] };
-  const developer = { roles: ["dev"] };
+  const developer = {
+    roles: ["dev"],
+    permissions: ["members.manage", "roles.manage"],
+  };
   const custom = { roles: ["custom_1_team_lead"], permissions: ["roles.manage"] };
 
   assert.equal(companyRoleRank(groupAdmin.roles), 30);
@@ -86,10 +89,20 @@ test("company role hierarchy protects owner and admin peers", () => {
   assert.equal(canManageMembership(admin, ["company_owner"]), false);
   assert.equal(canManageMembership(admin, ["company_admin"]), false);
   assert.equal(canManageMembership(admin, ["dev"]), true);
+  assert.equal(canManageMembership(developer, ["dev"]), true);
+  assert.equal(canManageMembership(developer, ["requester"]), true);
+  assert.equal(canManageMembership(developer, ["company_admin"]), false);
+  assert.equal(canManageMembership(developer, ["group_admin"]), false);
+  assert.equal(canManageMembership(custom, ["dev"]), true);
+  assert.equal(canManageMembership(custom, ["company_admin"]), false);
   assert.equal(canAssignCompanyRole(admin, "group_admin"), false);
   assert.equal(canAssignCompanyRole(admin, "company_owner"), false);
   assert.equal(canAssignCompanyRole(admin, "company_admin"), false);
   assert.equal(canAssignCompanyRole(admin, "dev"), true);
+  assert.equal(canAssignCompanyRole(developer, "dev"), true);
+  assert.equal(canAssignCompanyRole(developer, "requester"), true);
+  assert.equal(canAssignCompanyRole(developer, "company_admin"), false);
+  assert.equal(canAssignCompanyRole(developer, "group_admin"), false);
   assert.equal(canAssignCompanyRole(groupAdmin, "company_owner"), false);
   assert.equal(canAssignCompanyRole(groupAdmin, "company_admin"), true);
 });

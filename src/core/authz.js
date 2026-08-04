@@ -42,15 +42,26 @@ export function isCompanyManager(user) {
 
 export function canManageMembership(actor, targetRoleNames = []) {
   const actorRank = companyRoleRank(actor?.roles);
+  const targetRank = companyRoleRank(targetRoleNames);
   if (actorRank === 30) return true;
-  return actorRank === 20 && companyRoleRank(targetRoleNames) < 20;
+  if (actorRank === 20) return targetRank < 20;
+  // Developers (or anyone granted members/roles manage) may manage non-admin members only.
+  if (hasPermission(actor, "members.manage") || hasPermission(actor, "roles.manage")) {
+    return targetRank < 20;
+  }
+  return false;
 }
 
 export function canAssignCompanyRole(actor, roleName) {
   if (roleName === "company_owner") return false;
-  if (companyRoleRank(actor?.roles) === 30) return true;
-  return companyRoleRank(actor?.roles) === 20
-    && !["group_admin", "company_owner", "company_admin"].includes(roleName);
+  const actorRank = companyRoleRank(actor?.roles);
+  const adminRoles = ["group_admin", "company_owner", "company_admin"];
+  if (actorRank === 30) return true;
+  if (actorRank === 20) return !adminRoles.includes(roleName);
+  if (hasPermission(actor, "roles.manage")) {
+    return !adminRoles.includes(roleName);
+  }
+  return false;
 }
 
 export function isHierarchyPermission(code) {

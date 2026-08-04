@@ -184,13 +184,18 @@ export function createAuth({ pool, jwtSecret, authTokenTtl, config }) {
       ? next()
       : res.status(403).json({ message: "คุณไม่มีสิทธิ์ทำรายการนี้" });
 
-  const requireCompanyManager = (req, res, next) =>
-    isCompanyManager(req.user)
-      ? next()
-      : res.status(403).json({
-        code: "COMPANY_ROLE_REQUIRED",
-        message: "รายการนี้สำหรับ Group Admin หรือ Company Admin เท่านั้น",
-      });
+  const requireCompanyManager = (req, res, next) => {
+    if (isCompanyManager(req.user)) return next();
+    // Developers granted members/roles manage may pass this gate.
+    // Endpoint-level requirePermission still blocks company.manage actions.
+    if (hasPermission(req.user, "members.manage") || hasPermission(req.user, "roles.manage")) {
+      return next();
+    }
+    return res.status(403).json({
+      code: "COMPANY_ROLE_REQUIRED",
+      message: "รายการนี้สำหรับ Group Admin หรือ Company Admin เท่านั้น",
+    });
+  };
 
   return {
     auth,

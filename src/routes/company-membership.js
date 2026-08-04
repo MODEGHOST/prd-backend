@@ -165,7 +165,7 @@ export function registerCompanyMembershipRoutes(app, deps) {
     );
   }));
 
-  app.patch("/api/company/members/:membershipId/status", auth, requirePermission("members.manage"), requireCompanyManager, wrap(async (req, res) => {
+  app.patch("/api/company/members/:membershipId/status", auth, requirePermission("members.manage"), wrap(async (req, res) => {
     const status = req.body.status;
     if (!["active", "rejected", "suspended"].includes(status)) {
       return res.status(400).json({ message: "สถานะสมาชิกไม่ถูกต้อง" });
@@ -274,7 +274,7 @@ export function registerCompanyMembershipRoutes(app, deps) {
     })));
   }));
 
-  app.get("/api/company/permissions", auth, requirePermission("roles.manage"), requireCompanyManager, wrap(async (_req, res) => {
+  app.get("/api/company/permissions", auth, requirePermission("roles.manage"), wrap(async (_req, res) => {
     const [rows] = await pool.execute(
       "SELECT id, code, description FROM permissions ORDER BY code",
     );
@@ -284,7 +284,7 @@ export function registerCompanyMembershipRoutes(app, deps) {
     })));
   }));
 
-  app.post("/api/company/roles", auth, requirePermission("roles.manage"), requireCompanyManager, wrap(async (req, res) => {
+  app.post("/api/company/roles", auth, requirePermission("roles.manage"), wrap(async (req, res) => {
     const label = String(req.body.name || req.body.label || "").trim();
     const description = String(req.body.description || "").trim() || null;
     if (!label || label.length > 120) {
@@ -305,7 +305,7 @@ export function registerCompanyMembershipRoutes(app, deps) {
     res.status(201).json({ id: result.insertId, name, label, message: "สร้าง Role แล้ว" });
   }));
 
-  app.put("/api/company/roles/:roleId/permissions", auth, requirePermission("roles.manage"), requireCompanyManager, wrap(async (req, res) => {
+  app.put("/api/company/roles/:roleId/permissions", auth, requirePermission("roles.manage"), wrap(async (req, res) => {
     const permissionIds = [...new Set(
       (Array.isArray(req.body.permissionIds) ? req.body.permissionIds : [])
         .map(Number)
@@ -358,7 +358,7 @@ export function registerCompanyMembershipRoutes(app, deps) {
     res.json({ message: "อัปเดต Permission แล้ว" });
   }));
 
-  app.put("/api/company/members/:membershipId/roles", auth, requirePermission("roles.manage"), requireCompanyManager, wrap(async (req, res) => {
+  app.put("/api/company/members/:membershipId/roles", auth, requirePermission("roles.manage"), wrap(async (req, res) => {
     const roleNames = [...new Set(
       (Array.isArray(req.body.roles) ? req.body.roles : []).map(String),
     )];
@@ -380,7 +380,7 @@ export function registerCompanyMembershipRoutes(app, deps) {
     if (forbiddenRoles.length) {
       return res.status(403).json({
         code: "ROLE_ASSIGNMENT_HIERARCHY_DENIED",
-        message: "Company Admin ไม่สามารถมอบหมายบทบาท Group Admin หรือ Company Admin ได้",
+        message: "ไม่สามารถมอบหมายบทบาท Group Admin หรือ Company Admin ได้",
       });
     }
     const conn = await pool.getConnection();

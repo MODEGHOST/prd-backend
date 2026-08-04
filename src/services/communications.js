@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { timeoutSignal } from "../core/node16-compat.js";
 
 export function createOneTimeToken() {
   const token = randomBytes(32).toString("hex");
@@ -13,7 +14,7 @@ export function createEmailService({ config, emailFrom, logger }) {
     }
     const response = await fetch("https://api.resend.com/emails", {
       method: "POST",
-      signal: AbortSignal.timeout(10_000),
+      signal: timeoutSignal(10_000),
       headers: {
         Authorization: `Bearer ${config.resendApiKey}`,
         "Content-Type": "application/json",

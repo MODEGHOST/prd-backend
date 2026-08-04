@@ -12,3 +12,6 @@ database/backup_*.sql
 .DS_Store
 .idea/
 .vscode/
+
+.tools/
+
