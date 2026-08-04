@@ -102,6 +102,7 @@ export function createApplication(options = {}) {
     pool,
     jwtSecret: config.jwtSecret,
     authTokenTtl: config.authTokenTtl,
+    config,
   });
   const { authRateCleanupTimer, authRateLimit, closeAuthRateLimit } = createAuthRateLimit({
     redisUrl: config.redisUrl,
@@ -204,6 +205,7 @@ export function createApplication(options = {}) {
     canAssignCompanyRole,
     canManageMembership,
     companyRoleRank,
+    config,
     hasPermission,
     invalidateSessionCache,
     isHierarchyPermission,

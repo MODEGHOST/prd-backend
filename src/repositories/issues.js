@@ -3,7 +3,7 @@ import { hasPermission } from "../core/authz.js";
 export function createIssueRepository(pool) {
   async function getIssueById(issueId, companyId = null) {
     const [[issue]] = await pool.execute(
-      `SELECT i.*, p.code project_code, p.name project_name,
+      `SELECT i.*, p.code project_code, p.name project_name, p.status project_status,
               p.end_date project_end_date, p.start_date project_start_date,
               requester.name requester_name, assignee.name assignee_name
        FROM issues i

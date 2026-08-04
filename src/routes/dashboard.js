@@ -17,7 +17,7 @@ export function registerDashboardRoutes(app, deps) {
     const projectsQuery = pool.execute(
       `SELECT COUNT(*) total, SUM(p.status = 'active') active
        FROM projects p
-       WHERE p.company_id = ? AND (
+       WHERE p.company_id = ? AND p.status != 'inactive' AND (
           (? = 1)
           OR p.created_by = ? OR p.owner_id = ? OR EXISTS (
             SELECT 1 FROM project_members pm
@@ -54,7 +54,7 @@ export function registerDashboardRoutes(app, deps) {
     const tasksQuery = pool.execute(
       `SELECT COUNT(*) total, SUM(t.status = 'done') done
        FROM tasks t JOIN projects p ON p.id = t.project_id
-       WHERE t.assignee_id = ? AND t.issue_id IS NULL AND p.company_id = ?`,
+       WHERE t.assignee_id = ? AND t.issue_id IS NULL AND p.company_id = ? AND p.status != 'inactive'`,
       [req.user.id, req.user.companyId],
     );
     const [[projects], [issues], [tasks]] = await Promise.all([
@@ -79,7 +79,7 @@ export function registerDashboardRoutes(app, deps) {
       );
     const recentQuery = pool.execute(
       `SELECT i.id, i.ticket_no, i.title, i.status, i.priority, i.updated_at,
-              p.name project_name, u.name requester_name
+              CASE WHEN p.status = 'inactive' THEN NULL ELSE p.name END AS project_name, u.name requester_name
        FROM issues i LEFT JOIN projects p ON p.id = i.project_id
        JOIN users u ON u.id = i.requester_id
        WHERE i.company_id = ? AND (
@@ -104,7 +104,7 @@ export function registerDashboardRoutes(app, deps) {
     );
     const openIssueItemsQuery = pool.execute(
       `SELECT i.id, 'issue' item_type, i.ticket_no, i.title, i.status, i.priority,
-              i.updated_at, p.name project_name, u.name requester_name
+              i.updated_at, CASE WHEN p.status = 'inactive' THEN NULL ELSE p.name END AS project_name, u.name requester_name
        FROM issues i
        LEFT JOIN projects p ON p.id = i.project_id AND p.company_id = i.company_id
        JOIN users u ON u.id = i.requester_id
@@ -140,7 +140,7 @@ export function registerDashboardRoutes(app, deps) {
          FROM tasks t
          JOIN projects p ON p.id = t.project_id
          WHERE t.assignee_id = ? AND t.issue_id IS NULL
-           AND t.status <> 'done' AND p.company_id = ?
+           AND t.status <> 'done' AND p.company_id = ? AND p.status != 'inactive'
          ORDER BY t.updated_at DESC
          LIMIT 20`,
         [req.user.id, req.user.companyId],
@@ -223,6 +223,7 @@ export function registerDashboardRoutes(app, deps) {
 
     const projectWhere = [
       "p.company_id = ?",
+      "p.status != 'inactive'",
       `(p.created_by = ? OR p.owner_id = ? OR EXISTS (
         SELECT 1 FROM project_members viewer_project_member
         WHERE viewer_project_member.project_id = p.id

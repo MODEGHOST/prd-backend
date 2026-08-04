@@ -90,13 +90,18 @@ export function registerProjectRoutes(app, deps) {
       return paginatedJson(res, [], 0, pagination);
     }
     const accessParams = [req.user.companyId, readAll ? 1 : 0, req.user.id, req.user.id, req.user.id];
+    let statusFilter = "AND p.status != 'inactive'";
+    if (req.query.status) {
+      statusFilter = "AND p.status = ?";
+      accessParams.push(req.query.status);
+    }
     const accessWhere = `WHERE p.company_id = ? AND ((? = 1)
           OR p.created_by = ?
           OR p.owner_id = ?
           OR EXISTS (
             SELECT 1 FROM project_members m
             WHERE m.project_id = p.id AND m.user_id = ?
-          ))`;
+          )) ${statusFilter}`;
   
     const [[{ total }]] = await pool.execute(
       `SELECT COUNT(*) total FROM projects p ${accessWhere}`,
@@ -445,6 +450,14 @@ export function registerProjectRoutes(app, deps) {
       fields.push("owner_id = ?");
       values.push(nextOwnerId);
     }
+    if (req.body.status !== undefined) {
+      const allowed = ["pending", "active", "completed", "cancelled", "inactive", "on_hold"];
+      if (!allowed.includes(req.body.status)) {
+        return res.status(400).json({ message: "สถานะโครงการไม่ถูกต้อง" });
+      }
+      fields.push("status = ?");
+      values.push(req.body.status);
+    }
   
     if (!fields.length) {
       return res.status(400).json({ message: "ไม่มีข้อมูลให้อัปเดต" });
@@ -470,7 +483,61 @@ export function registerProjectRoutes(app, deps) {
   
     res.json({ message: "อัปเดตโครงการแล้ว" });
   }));
-  
+
+  app.delete("/api/projects/:id", auth, requirePermission("projects.update"), wrap(async (req, res) => {
+    const projectId = Number(req.params.id);
+    const manage = await canManageProject(req.user, projectId);
+    if (manage === null) return res.status(404).json({ message: "ไม่พบโครงการ" });
+    if (!manage) return res.status(403).json({ message: "คุณไม่มีสิทธิ์จัดการโครงการนี้" });
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      await conn.execute(
+        "UPDATE projects SET status = 'inactive' WHERE id = ?",
+        [projectId],
+      );
+
+      const [affectedIssues] = await conn.execute(
+        "SELECT id FROM issues WHERE project_id = ? AND status IN ('open', 'accepted', 'in_progress')",
+        [projectId],
+      );
+
+      if (affectedIssues.length > 0) {
+        await conn.execute(
+          "UPDATE issues SET status = 'cancelled' WHERE project_id = ? AND status IN ('open', 'accepted', 'in_progress')",
+          [projectId],
+        );
+
+        for (const issue of affectedIssues) {
+          try {
+            await conn.execute(
+              `INSERT INTO issue_activities (issue_id, user_id, type, comment, created_at)
+               VALUES (?, ?, 'status_change', ?, NOW())`,
+              [
+                issue.id,
+                req.user.id,
+                "ตั๋วถูกปรับสถานะเป็น ยกเลิกแล้ว (Cancelled) โดยอัตโนมัติ เนื่องจากโครงการถูกปิดใช้งาน/ยกเลิก",
+              ],
+            );
+          } catch {
+            // Ignore activity insert failure
+          }
+        }
+      }
+
+      await conn.commit();
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+
+    res.json({ message: "ปิดใช้งานโครงการเรียบร้อย และปรับสถานะตั๋วที่เกี่ยวข้องเป็นยกเลิกแล้ว", projectId, status: "inactive" });
+  }));
+
   app.put("/api/projects/:id/members", auth, requirePermission("projects.members.manage"), wrap(async (req, res) => {
     const projectId = Number(req.params.id);
     const manage = await canManageProject(req.user, projectId);
@@ -635,9 +702,107 @@ export function registerProjectRoutes(app, deps) {
        ORDER BY wp.week_start ASC, wp.week_end ASC, wp.id ASC`,
       [projectId],
     );
+
+    try {
+      const [allPlanTasks] = await pool.execute(
+        `SELECT t.id, t.plan_id, t.title, t.status, t.priority, t.due_date, t.start_date, t.assignee_id, u.name assignee_name
+         FROM tasks t
+         LEFT JOIN users u ON u.id = t.assignee_id
+         WHERE t.project_id = ? AND t.plan_id IS NOT NULL
+         ORDER BY t.position ASC, t.id ASC`,
+        [projectId]
+      );
+      const tasksByPlan = {};
+      for (const t of allPlanTasks) {
+        if (!tasksByPlan[t.plan_id]) tasksByPlan[t.plan_id] = [];
+        tasksByPlan[t.plan_id].push(t);
+      }
+      for (const row of rows) {
+        const tasks = tasksByPlan[row.id] || [];
+        row.tasks = tasks;
+        row.total_tasks = tasks.length;
+        row.done_tasks = tasks.filter(t => t.status === "done").length;
+        row.in_progress_tasks = tasks.filter(t => t.status === "doing" || t.status === "review").length;
+        row.calculated_progress = tasks.length > 0 
+          ? Math.round((row.done_tasks / row.total_tasks) * 100)
+          : (row.status === "done" ? 100 : row.status === "in_progress" ? 50 : 0);
+      }
+    } catch (err) {
+      for (const row of rows) {
+        row.tasks = [];
+        row.total_tasks = 0;
+        row.done_tasks = 0;
+        row.in_progress_tasks = 0;
+        row.calculated_progress = row.status === "done" ? 100 : row.status === "in_progress" ? 50 : 0;
+      }
+    }
+
     res.json(rows);
   }));
-  
+
+  app.post("/api/projects/:id/weekly-plans/batch", auth, requirePermission("projects.plan.manage"), wrap(async (req, res) => {
+    const projectId = Number(req.params.id);
+    const project = await getProjectById(projectId, req.user.companyId);
+    if (!project) return res.status(404).json({ message: "ไม่พบโครงการ" });
+    if (!(await isProjectStaffMember(projectId, req.user.id))) {
+      return res.status(403).json({ message: "เฉพาะสมาชิกทีมโครงการที่แก้ไขแผนงานได้" });
+    }
+    if (!project.start_date || !project.end_date) {
+      return res.status(400).json({ message: "กรุณากำหนดวันเริ่มและวันสิ้นสุดของโครงการก่อน" });
+    }
+
+    const { plans } = req.body;
+    if (!Array.isArray(plans) || plans.length === 0) {
+      return res.status(400).json({ message: "กรุณาระบุรายการช่วงงานที่ต้องการสร้าง" });
+    }
+
+    const createdPlans = [];
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      for (const p of plans) {
+        if (!p.title?.trim() || !p.weekStart || !p.weekEnd) continue;
+        let assignee = null;
+        if (p.assigneeId !== undefined && p.assigneeId !== null && p.assigneeId !== "") {
+          const aId = Number(p.assigneeId);
+          if (Number.isInteger(aId) && aId > 0) assignee = aId;
+        }
+
+        const [result] = await connection.execute(
+          `INSERT INTO weekly_plans
+            (project_id, title, description, week_start, week_end, assignee_id, status, created_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            projectId,
+            p.title.trim(),
+            p.description?.trim() || null,
+            p.weekStart,
+            p.weekEnd,
+            assignee,
+            p.status || "planned",
+            req.user.id,
+          ],
+        );
+        const planRow = await fetchWeeklyPlanRow(connection, result.insertId);
+        createdPlans.push(planRow);
+        emitWeeklyPlanChanged(io, {
+          action: "create",
+          plan: planRow,
+          projectId,
+          companyId: req.user.companyId,
+        });
+      }
+      await connection.commit();
+    } catch (err) {
+      await connection.rollback();
+      throw err;
+    } finally {
+      connection.release();
+    }
+
+    res.status(201).json({ message: "สร้างช่วงงานทั้งหมดเรียบร้อย", plans: createdPlans });
+  }));
+
   app.post("/api/projects/:id/weekly-plans", auth, requirePermission("projects.plan.manage"), wrap(async (req, res) => {
     const projectId = Number(req.params.id);
     const project = await getProjectById(projectId, req.user.companyId);

@@ -3,6 +3,7 @@ import {
   verificationEmail,
 } from "../services/email-templates.js";
 import { passwordPolicyErrors } from "../core/password-policy.js";
+import { centerUserTableSql } from "../core/center-user.js";
 import { JWT_SIGN_OPTIONS } from "../middleware/auth.js";
 import { readTokenFromRequest } from "../core/session-cookie.js";
 
@@ -57,6 +58,7 @@ export function registerPublicAuthRoutes(app, deps) {
     sign,
     wrap,
   } = deps;
+  const center = centerUserTableSql(config);
 
   app.get("/api/companies/public", authRateLimit({ limit: 60 }), wrap(async (_req, res) => {
     const [rows] = await pool.execute(
@@ -128,14 +130,14 @@ export function registerPublicAuthRoutes(app, deps) {
     if (!company) return res.status(400).json({ message: "บริษัทไม่เปิดรับสมัคร" });
 
     const [[existingUsername]] = await pool.execute(
-      "SELECT id FROM users WHERE username = ?",
+      `SELECT id FROM ${center} WHERE username = ?`,
       [normalizedUsername],
     );
     if (existingUsername) {
       return res.status(409).json({ message: "ชื่อผู้ใช้นี้ถูกใช้แล้ว" });
     }
     const [[existingEmail]] = await pool.execute(
-      "SELECT id FROM users WHERE email = ?",
+      `SELECT id FROM ${center} WHERE email = ?`,
       [normalizedEmail],
     );
     if (existingEmail) {
@@ -143,7 +145,7 @@ export function registerPublicAuthRoutes(app, deps) {
     }
     if (normalizedTelegram) {
       const [[existingTelegram]] = await pool.execute(
-        "SELECT id FROM users WHERE telegram_id = ?",
+        `SELECT id FROM ${center} WHERE telegram_id = ?`,
         [normalizedTelegram],
       );
       if (existingTelegram) {
@@ -158,12 +160,28 @@ export function registerPublicAuthRoutes(app, deps) {
     let userId;
     try {
       await conn.beginTransaction();
-      const [result] = await conn.execute(
-        `INSERT INTO users
-          (name, first_name, last_name, email, username, telegram_id, password_hash,
-           role, status, email_verified_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'requester', 'active', NOW())`,
+      const [centerResult] = await conn.execute(
+        `INSERT INTO ${center}
+          (first_name, last_name, email, username, telegram_id, password_hash,
+           department, status, token_version)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, 'active', 0)`,
         [
+          firstName.trim(),
+          lastName.trim(),
+          normalizedEmail,
+          normalizedUsername,
+          normalizedTelegram,
+          passwordHash,
+        ],
+      );
+      userId = centerResult.insertId;
+      await conn.execute(
+        `INSERT INTO users
+          (id, name, first_name, last_name, email, username, telegram_id, password_hash,
+           role, status, email_verified_at, token_version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'requester', 'active', NOW(), 0)`,
+        [
+          userId,
           `${firstName.trim()} ${lastName.trim()}`,
           firstName.trim(),
           lastName.trim(),
@@ -173,7 +191,6 @@ export function registerPublicAuthRoutes(app, deps) {
           passwordHash,
         ],
       );
-      userId = result.insertId;
       const [membershipResult] = await conn.execute(
         `INSERT INTO company_memberships
           (company_id, user_id, employee_code, status, approved_by, approved_at)
@@ -278,6 +295,10 @@ export function registerPublicAuthRoutes(app, deps) {
          WHERE id = ?`,
         [record.user_id],
       );
+      await conn.execute(
+        `UPDATE ${center} SET status = 'active' WHERE id = ?`,
+        [record.user_id],
+      );
       await conn.commit();
       res.json({ message: "ยืนยันอีเมลแล้ว กรุณารอผู้ดูแลบริษัทอนุมัติ" });
     } catch (error) {
@@ -291,13 +312,14 @@ export function registerPublicAuthRoutes(app, deps) {
   app.post("/api/auth/resend-verification", authRateLimit({ limit: 5 }), wrap(async (req, res) => {
     const email = String(req.body.email || "").trim().toLowerCase();
     const [[user]] = await pool.execute(
-      `SELECT u.id, u.email, cm.company_id, cm.status membership_status
-       FROM users u
+      `SELECT u.id, c.email, cm.company_id, cm.status membership_status
+       FROM ${center} c
+       JOIN users u ON u.id = c.id
        JOIN company_memberships cm
          ON cm.user_id = u.id AND cm.status IN ('pending', 'active')
-       JOIN companies c ON c.id = cm.company_id AND c.is_active = TRUE
-       WHERE u.email = ?
-         AND u.status <> 'suspended'
+       JOIN companies cpy ON cpy.id = cm.company_id AND cpy.is_active = TRUE
+       WHERE c.email = ?
+         AND c.status <> 'suspended'
          AND u.email_verified_at IS NULL
        ORDER BY cm.status = 'active' DESC, cm.id
        LIMIT 1`,
@@ -352,12 +374,13 @@ export function registerPublicAuthRoutes(app, deps) {
   app.post("/api/auth/forgot-password", authRateLimit({ limit: 5 }), wrap(async (req, res) => {
     const email = String(req.body.email || "").trim().toLowerCase();
     const [[user]] = await pool.execute(
-      `SELECT u.id, u.email, cm.company_id
-       FROM users u
+      `SELECT u.id, c.email, cm.company_id
+       FROM ${center} c
+       JOIN users u ON u.id = c.id
        JOIN company_memberships cm ON cm.user_id = u.id AND cm.status = 'active'
-       JOIN companies c ON c.id = cm.company_id AND c.is_active = TRUE
-       WHERE u.email = ?
-         AND u.status <> 'suspended'
+       JOIN companies cpy ON cpy.id = cm.company_id AND cpy.is_active = TRUE
+       WHERE c.email = ?
+         AND c.status <> 'suspended'
        ORDER BY cm.id
        LIMIT 1`,
       [email],
@@ -410,9 +433,9 @@ export function registerPublicAuthRoutes(app, deps) {
     try {
       await conn.beginTransaction();
       const [[record]] = await conn.execute(
-        `SELECT prt.id, prt.user_id, u.password_hash
+        `SELECT prt.id, prt.user_id, c.password_hash
          FROM password_reset_tokens prt
-         JOIN users u ON u.id = prt.user_id
+         JOIN ${center} c ON c.id = prt.user_id
          WHERE prt.token_hash = ? AND prt.used_at IS NULL AND prt.expires_at > NOW()
          FOR UPDATE`,
         [tokenHash],
@@ -432,6 +455,12 @@ export function registerPublicAuthRoutes(app, deps) {
       await conn.execute(
         "UPDATE password_reset_tokens SET used_at = NOW() WHERE id = ?",
         [record.id],
+      );
+      await conn.execute(
+        `UPDATE ${center}
+         SET password_hash = ?, token_version = token_version + 1
+         WHERE id = ?`,
+        [passwordHash, record.user_id],
       );
       await conn.execute(
         `UPDATE users SET password_hash = ?, token_version = token_version + 1
@@ -461,9 +490,11 @@ export function registerPublicAuthRoutes(app, deps) {
       return res.status(400).json({ message: "กรุณากรอกชื่อผู้ใช้และรหัสผ่าน" });
     }
     const [rows] = await pool.execute(
-      `SELECT id, name, email, username, password_hash, status, email_verified_at, token_version
-       FROM users
-       WHERE username = ?`,
+      `SELECT c.id, u.name, c.email, c.username, c.password_hash, c.status,
+              u.email_verified_at, c.token_version
+       FROM ${center} c
+       JOIN users u ON u.id = c.id
+       WHERE c.username = ?`,
       [username],
     );
     const user = rows[0];
@@ -505,6 +536,10 @@ export function registerPublicAuthRoutes(app, deps) {
   }));
 
   app.post("/api/auth/logout", auth, wrap(async (req, res) => {
+    await pool.execute(
+      `UPDATE ${center} SET token_version = token_version + 1 WHERE id = ?`,
+      [req.user.id],
+    );
     await pool.execute(
       "UPDATE users SET token_version = token_version + 1 WHERE id = ?",
       [req.user.id],
@@ -550,7 +585,7 @@ export function registerPublicAuthRoutes(app, deps) {
       if (badTelegram) return res.status(400).json({ message: badTelegram });
       if (normalizedTelegram) {
         const [[taken]] = await pool.execute(
-          "SELECT id FROM users WHERE telegram_id = ? AND id <> ?",
+          `SELECT id FROM ${center} WHERE telegram_id = ? AND id <> ?`,
           [normalizedTelegram, req.user.id],
         );
         if (taken) {
@@ -561,13 +596,19 @@ export function registerPublicAuthRoutes(app, deps) {
 
     const fields = [];
     const values = [];
+    const centerFields = [];
+    const centerValues = [];
     if (firstName !== undefined) {
       fields.push("first_name = ?");
       values.push(firstName);
+      centerFields.push("first_name = ?");
+      centerValues.push(firstName);
     }
     if (lastName !== undefined) {
       fields.push("last_name = ?");
       values.push(lastName);
+      centerFields.push("last_name = ?");
+      centerValues.push(lastName);
     }
     if (firstName !== undefined || lastName !== undefined) {
       const nextFirst = firstName ?? req.user.firstName ?? "";
@@ -578,6 +619,8 @@ export function registerPublicAuthRoutes(app, deps) {
     if (telegramProvided) {
       fields.push("telegram_id = ?");
       values.push(normalizedTelegram);
+      centerFields.push("telegram_id = ?");
+      centerValues.push(normalizedTelegram);
     }
     if (!fields.length) {
       return res.status(400).json({ message: "ไม่มีข้อมูลให้อัปเดต" });
@@ -587,6 +630,13 @@ export function registerPublicAuthRoutes(app, deps) {
       `UPDATE users SET ${fields.join(", ")} WHERE id = ?`,
       values,
     );
+    if (centerFields.length) {
+      centerValues.push(req.user.id);
+      await pool.execute(
+        `UPDATE ${center} SET ${centerFields.join(", ")} WHERE id = ?`,
+        centerValues,
+      );
+    }
     invalidateSessionCache?.();
     const token = readTokenFromRequest(req);
     const session = await loadSession(token);

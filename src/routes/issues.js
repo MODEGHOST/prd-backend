@@ -223,7 +223,7 @@ export function registerIssueRoutes(app, deps) {
               i.project_id, i.system_component, i.requester_id, i.assignee_id, i.created_at, i.updated_at,
               i.started_at, i.completed_at, i.estimated_completion_at,
               LEFT(i.description, 220) AS description,
-              p.code project_code, p.name project_name, r.name requester_name, a.name assignee_name,
+              p.code project_code, p.name project_name, p.status project_status, r.name requester_name, a.name assignee_name,
               COALESCE(mc.member_count, 0) member_count,
               (
                 i.assignee_id = ?

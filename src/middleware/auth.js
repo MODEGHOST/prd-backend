@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import jwt from "jsonwebtoken";
 import { compatibilityRole, hasPermission, isCompanyManager } from "../core/authz.js";
+import { centerUserTableSql } from "../core/center-user.js";
 import { readTokenFromRequest } from "../core/session-cookie.js";
 import { wrap } from "./async-handler.js";
 
@@ -10,8 +11,9 @@ export const JWT_VERIFY_OPTIONS = Object.freeze({ algorithms: ["HS256"] });
 const SESSION_CACHE_TTL_MS = 5_000;
 const SESSION_CACHE_MAX = 500;
 
-export function createAuth({ pool, jwtSecret, authTokenTtl }) {
+export function createAuth({ pool, jwtSecret, authTokenTtl, config }) {
   const sessionCache = new Map();
+  const center = centerUserTableSql(config);
 
   function cacheKey(token) {
     return createHash("sha256").update(token).digest("hex");
@@ -61,9 +63,20 @@ export function createAuth({ pool, jwtSecret, authTokenTtl }) {
 
     const claims = jwt.verify(token, jwtSecret, JWT_VERIFY_OPTIONS);
     const [[account]] = await pool.execute(
-      `SELECT id, name, first_name, last_name, email, username, telegram_id,
-              role legacy_role, department, status, email_verified_at, token_version
-       FROM users WHERE id = ?`,
+      `SELECT u.id, u.name,
+              COALESCE(c.first_name, u.first_name) AS first_name,
+              COALESCE(c.last_name, u.last_name) AS last_name,
+              COALESCE(c.email, u.email) AS email,
+              COALESCE(c.username, u.username) AS username,
+              COALESCE(c.telegram_id, u.telegram_id) AS telegram_id,
+              u.role legacy_role,
+              COALESCE(c.department, u.department) AS department,
+              COALESCE(c.status, u.status) AS status,
+              u.email_verified_at,
+              COALESCE(c.token_version, u.token_version) AS token_version
+       FROM users u
+       LEFT JOIN ${center} c ON c.id = u.id
+       WHERE u.id = ?`,
       [claims.id],
     );
     // Early-stage: email verification is not required. Allow pending (legacy) accounts.

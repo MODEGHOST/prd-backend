@@ -12,7 +12,8 @@ export function userRoom(companyId, userId) {
 
 export async function fetchTaskBoardRow(pool, { taskId, companyId, viewerUserId }) {
   const [[row]] = await pool.execute(
-    `SELECT t.id, t.project_id, t.issue_id, t.title, t.description, t.status, t.priority,
+    `SELECT t.id, t.project_id, t.issue_id, t.plan_id, wp.title AS plan_title,
+            t.title, t.description, t.status, t.priority,
             t.difficulty,
             t.assignee_id, t.position, t.created_at, t.updated_at,
             COALESCE(t.start_date, p.start_date) AS start_date,
@@ -34,6 +35,7 @@ export async function fetchTaskBoardRow(pool, { taskId, companyId, viewerUserId 
      JOIN projects p ON p.id = t.project_id AND p.company_id = ?
      LEFT JOIN users u ON u.id = t.assignee_id
      LEFT JOIN issues i ON i.id = t.issue_id
+     LEFT JOIN weekly_plans wp ON wp.id = t.plan_id
      LEFT JOIN issue_members im ON im.issue_id = t.issue_id AND im.user_id = ?
      LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = ?
      WHERE t.id = ?`,
@@ -59,7 +61,33 @@ export async function fetchWeeklyPlanRow(pool, planId) {
      WHERE wp.id = ?`,
     [planId],
   );
-  return row || null;
+  if (!row) return null;
+
+  try {
+    const [tasks] = await pool.execute(
+      `SELECT t.id, t.title, t.status, t.priority, t.due_date, t.start_date, t.assignee_id, u.name assignee_name
+       FROM tasks t
+       LEFT JOIN users u ON u.id = t.assignee_id
+       WHERE t.plan_id = ?
+       ORDER BY t.position ASC, t.id ASC`,
+      [planId]
+    );
+    row.tasks = tasks || [];
+    row.total_tasks = tasks.length;
+    row.done_tasks = tasks.filter(t => t.status === "done").length;
+    row.in_progress_tasks = tasks.filter(t => t.status === "doing" || t.status === "review").length;
+    row.calculated_progress = tasks.length > 0 
+      ? Math.round((row.done_tasks / row.total_tasks) * 100)
+      : (row.status === "done" ? 100 : row.status === "in_progress" ? 50 : 0);
+  } catch (err) {
+    row.tasks = [];
+    row.total_tasks = 0;
+    row.done_tasks = 0;
+    row.in_progress_tasks = 0;
+    row.calculated_progress = row.status === "done" ? 100 : row.status === "in_progress" ? 50 : 0;
+  }
+
+  return row;
 }
 
 export async function fetchIssueListRow(pool, { issueId, companyId, viewerUserId }) {

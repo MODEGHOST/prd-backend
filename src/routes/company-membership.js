@@ -5,6 +5,7 @@ export function registerCompanyMembershipRoutes(app, deps) {
     canAssignCompanyRole,
     canManageMembership,
     companyRoleRank,
+    config,
     hasPermission,
     invalidateSessionCache,
     isHierarchyPermission,
@@ -18,6 +19,9 @@ export function registerCompanyMembershipRoutes(app, deps) {
     STAFF_MEMBERSHIP_SQL,
     wrap,
   } = deps;
+  const center = config
+    ? `\`${config.sharedDbName}\`.\`${config.centerUserTable}\``
+    : "`shared_auth`.`Center_user_lfb`";
 
   app.get("/api/companies", auth, wrap(async (req, res) => {
     const [rows] = await pool.execute(
@@ -226,6 +230,10 @@ export function registerCompanyMembershipRoutes(app, deps) {
         [status, req.user.id, status, req.params.membershipId, req.user.companyId],
       );
       if (status === "suspended" || status === "rejected") {
+        await connection.execute(
+          `UPDATE ${center} SET token_version = token_version + 1 WHERE id = ?`,
+          [target.user_id],
+        );
         await connection.execute(
           "UPDATE users SET token_version = token_version + 1 WHERE id = ?",
           [target.user_id],

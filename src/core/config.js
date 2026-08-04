@@ -116,6 +116,9 @@ export function loadConfig(env = process.env) {
       database: env.DB_NAME || "lfbsmart_project",
       connectionLimit: positiveInteger(env.DB_POOL_LIMIT, 30, "DB_POOL_LIMIT"),
     }),
+    // Central SSO identity (no PRD/CMS roles here).
+    sharedDbName: env.SHARED_DB_NAME || "shared_auth",
+    centerUserTable: env.CENTER_USER_TABLE || "Center_user_lfb",
   });
 }
 

@@ -221,15 +221,22 @@ export function registerTaskRoutes(app, deps) {
       }
     }
 
+    let linkedPlanId = null;
+    if (req.body.planId !== undefined && req.body.planId !== null && req.body.planId !== "") {
+      linkedPlanId = Number(req.body.planId);
+      if (!Number.isInteger(linkedPlanId) || linkedPlanId <= 0) linkedPlanId = null;
+    }
+
     const [result] = await pool.execute(
       `INSERT INTO tasks
-        (company_id, project_id, issue_id, title, description, priority, difficulty,
+        (company_id, project_id, issue_id, plan_id, title, description, priority, difficulty,
          assignee_id, start_date, due_date)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         req.user.companyId,
         pid,
         linkedIssueId,
+        linkedPlanId,
         title,
         description || null,
         priority || "medium",
@@ -296,9 +303,12 @@ export function registerTaskRoutes(app, deps) {
     }
 
     const boardGate = await getProjectBoardGate(pool, task.project_id);
-    const detailFields = ["title", "description", "priority", "difficulty", "assigneeId", "startDate", "dueDate"];
+    const detailFields = ["title", "description", "priority", "difficulty", "assigneeId", "startDate", "dueDate", "planId"];
     const updatesDetails = detailFields.some((field) => Object.hasOwn(req.body, field));
     let detailUpdateValues = null;
+    let hasPlanIdUpdate = false;
+    let linkedPlanIdVal = null;
+
     if (updatesDetails) {
       if (boardGate.boardLocked) {
         return res.status(409).json({ message: "งานทั้งหมดเสร็จสิ้นแล้ว ไม่สามารถแก้ไขรายละเอียดงานได้อีก" });
@@ -354,6 +364,16 @@ export function registerTaskRoutes(app, deps) {
         return res.status(403).json({ message: "เฉพาะผู้ดูแลโครงการที่เปลี่ยนผู้รับผิดชอบได้" });
       }
 
+      if (Object.hasOwn(req.body, "planId")) {
+        hasPlanIdUpdate = true;
+        if (req.body.planId === null || req.body.planId === "") {
+          linkedPlanIdVal = null;
+        } else {
+          const pVal = Number(req.body.planId);
+          linkedPlanIdVal = Number.isInteger(pVal) && pVal > 0 ? pVal : null;
+        }
+      }
+
       detailUpdateValues = [
         title.trim(),
         description?.trim() || null,
@@ -404,10 +424,11 @@ export function registerTaskRoutes(app, deps) {
     try {
       await connection.beginTransaction();
       if (detailUpdateValues) {
+        const planSetClause = hasPlanIdUpdate ? ", plan_id = ?" : "";
         await connection.execute(
           `UPDATE tasks
            SET title = ?, description = ?, priority = ?, difficulty = ?,
-               assignee_id = ?, start_date = ?, due_date = ?
+               assignee_id = ?, start_date = ?, due_date = ?${planSetClause}
            WHERE id = ?`,
           detailUpdateValues,
         );
