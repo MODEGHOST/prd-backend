@@ -62,8 +62,9 @@ copy .env.example .env
 อยากบังคับใช้ไฟล์ production บนเครื่อง local ให้ตั้ง `USE_PRODUCTION_ENV=1`  
 ห้าม commit ไฟล์ที่มีรหัสผ่าน / JWT / API key
 
-Production บังคับมี `JWT_SECRET` (≥32 ตัว), `DB_PASSWORD`, `RESEND_API_KEY`,
-`EMAIL_FROM` ที่ไม่ใช่ `example.com` และต้องปิด `SEED_DEMO_DATA`
+Production บังคับมี `JWT_SECRET` (≥32 ตัว), `DB_PASSWORD`, `SMTP_USER` + `SMTP_PASS`
+(Gmail App Password), `EMAIL_FROM` ที่ไม่ใช่ `example.com` และต้องปิด `SEED_DEMO_DATA`.
+ถ้ายังไม่พร้อมส่งเมลจริง ให้ตั้ง `ALLOW_MISSING_SMTP=1` (อีเมลจะ no-op)
 
 ## เริ่มใช้งาน
 

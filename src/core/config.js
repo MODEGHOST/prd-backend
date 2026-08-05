@@ -31,7 +31,14 @@ export function loadConfig(env = process.env) {
     "FRONTEND_URL",
     ["http:", "https:"],
   );
-  const resendApiKey = env.RESEND_API_KEY || "";
+  const smtpHost = env.SMTP_HOST || "smtp.gmail.com";
+  const smtpPort = positiveInteger(env.SMTP_PORT, 587, "SMTP_PORT", 65535);
+  const smtpSecure = env.SMTP_SECURE == null
+    ? smtpPort === 465
+    : env.SMTP_SECURE === "1";
+  const smtpUser = env.SMTP_USER || "";
+  const smtpPass = env.SMTP_PASS || "";
+  const smtpConfigured = Boolean(smtpUser && smtpPass);
   const emailFrom = env.EMAIL_FROM
     || "ลี้ไฟเบอร์บอร์ด IPMS <noreply@example.com>";
   const dbUser = env.DB_USER || "root";
@@ -43,9 +50,9 @@ export function loadConfig(env = process.env) {
   if (production && jwtSecret.length < 32) {
     throw new Error("JWT_SECRET must contain at least 32 characters in production");
   }
-  // Resend may be empty during staging on shared hosting; emails no-op until configured.
-  if (production && !resendApiKey && env.ALLOW_MISSING_RESEND !== "1") {
-    throw new Error("RESEND_API_KEY is required in production");
+  // SMTP may be empty during staging; emails no-op until configured.
+  if (production && !smtpConfigured && env.ALLOW_MISSING_SMTP !== "1") {
+    throw new Error("SMTP_USER and SMTP_PASS are required in production");
   }
   if (production && /example\.com/i.test(emailFrom)) {
     throw new Error("EMAIL_FROM must use a verified production sender");
@@ -79,7 +86,14 @@ export function loadConfig(env = process.env) {
     frontendUrl,
     jwtSecret,
     emailFrom,
-    resendApiKey,
+    smtp: Object.freeze({
+      host: smtpHost,
+      port: smtpPort,
+      secure: smtpSecure,
+      user: smtpUser,
+      pass: smtpPass,
+      configured: smtpConfigured,
+    }),
     redisUrl: env.REDIS_URL
       ? urlWithProtocols(env.REDIS_URL, "REDIS_URL", ["redis:", "rediss:"])
       : "",

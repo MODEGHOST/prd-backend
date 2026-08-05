@@ -7,10 +7,11 @@ import { centerUserTableSql } from "../core/center-user.js";
 import { JWT_SIGN_OPTIONS } from "../middleware/auth.js";
 import { readTokenFromRequest } from "../core/session-cookie.js";
 
-const USERNAME_PATTERN = /^[a-zA-Z0-9._-]{3,50}$/;
 const TELEGRAM_PATTERN = /^@?[a-zA-Z0-9_]{3,64}$/;
+const EMPLOYEE_CODE_PATTERN = /^\d{8}$/;
 
-function normalizeUsername(value) {
+/** Login identity stored in Center `username` column = employee code. */
+function normalizeLoginId(value) {
   return String(value || "").trim().toLowerCase();
 }
 
@@ -18,14 +19,6 @@ function normalizeTelegramId(value) {
   const raw = String(value || "").trim();
   if (!raw) return null;
   return raw.startsWith("@") ? raw : raw;
-}
-
-function usernameError(username) {
-  if (!username) return "กรุณากรอกชื่อผู้ใช้";
-  if (!USERNAME_PATTERN.test(username)) {
-    return "ชื่อผู้ใช้ต้องมี 3-50 ตัวอักษร (a-z, 0-9, . _ -)";
-  }
-  return null;
 }
 
 function telegramError(telegramId) {
@@ -77,27 +70,25 @@ export function registerPublicAuthRoutes(app, deps) {
       firstName,
       lastName,
       email,
-      username,
       telegramId,
       password,
       companyId,
       inviteToken,
     } = req.body;
     const normalizedEmail = String(email || "").trim().toLowerCase();
-    const normalizedUsername = normalizeUsername(username);
+    const normalizedEmployeeCode = String(employeeCode || "").trim();
+    const loginId = normalizeLoginId(normalizedEmployeeCode);
     const normalizedTelegram = normalizeTelegramId(telegramId);
     const inviteHash = inviteToken
       ? createHash("sha256").update(String(inviteToken)).digest("hex")
       : null;
-    if (!employeeCode?.trim() || !firstName?.trim() || !lastName?.trim()
+    if (!normalizedEmployeeCode || !firstName?.trim() || !lastName?.trim()
         || !normalizedEmail || !password || !companyId) {
       return res.status(400).json({ message: "กรุณากรอกข้อมูลสมัครสมาชิกให้ครบถ้วน" });
     }
-    if (!/^\d{8}$/.test(String(employeeCode).trim())) {
+    if (!EMPLOYEE_CODE_PATTERN.test(normalizedEmployeeCode)) {
       return res.status(400).json({ message: "รหัสพนักงานต้องเป็นตัวเลข 8 หลัก" });
     }
-    const badUsername = usernameError(normalizedUsername);
-    if (badUsername) return res.status(400).json({ message: badUsername });
     const badTelegram = telegramError(normalizedTelegram);
     if (badTelegram) return res.status(400).json({ message: badTelegram });
     const passwordErrors = passwordPolicyErrors(password);
@@ -129,12 +120,12 @@ export function registerPublicAuthRoutes(app, deps) {
       );
     if (!company) return res.status(400).json({ message: "บริษัทไม่เปิดรับสมัคร" });
 
-    const [[existingUsername]] = await pool.execute(
+    const [[existingLogin]] = await pool.execute(
       `SELECT id FROM ${center} WHERE username = ?`,
-      [normalizedUsername],
+      [loginId],
     );
-    if (existingUsername) {
-      return res.status(409).json({ message: "ชื่อผู้ใช้นี้ถูกใช้แล้ว" });
+    if (existingLogin) {
+      return res.status(409).json({ message: "รหัสพนักงานนี้ถูกใช้แล้ว" });
     }
     const [[existingEmail]] = await pool.execute(
       `SELECT id FROM ${center} WHERE email = ?`,
@@ -169,7 +160,7 @@ export function registerPublicAuthRoutes(app, deps) {
           firstName.trim(),
           lastName.trim(),
           normalizedEmail,
-          normalizedUsername,
+          loginId,
           normalizedTelegram,
           passwordHash,
         ],
@@ -186,7 +177,7 @@ export function registerPublicAuthRoutes(app, deps) {
           firstName.trim(),
           lastName.trim(),
           normalizedEmail,
-          normalizedUsername,
+          loginId,
           normalizedTelegram,
           passwordHash,
         ],
@@ -198,7 +189,7 @@ export function registerPublicAuthRoutes(app, deps) {
         [
           company.id,
           userId,
-          employeeCode.trim(),
+          normalizedEmployeeCode,
           invitation ? "active" : "pending",
           invitation?.invited_by || null,
           invitation ? new Date() : null,
@@ -484,10 +475,11 @@ export function registerPublicAuthRoutes(app, deps) {
   }));
 
   app.post("/api/auth/login", authRateLimit({ limit: 10 }), wrap(async (req, res) => {
-    const username = normalizeUsername(req.body.username);
+    // Login identity = employee code (stored in Center.username). Accept either field name.
+    const loginId = normalizeLoginId(req.body.employeeCode || req.body.username);
     const { password } = req.body;
-    if (!username || !password) {
-      return res.status(400).json({ message: "กรุณากรอกชื่อผู้ใช้และรหัสผ่าน" });
+    if (!loginId || !password) {
+      return res.status(400).json({ message: "กรุณากรอกรหัสพนักงานและรหัสผ่าน" });
     }
     const [rows] = await pool.execute(
       `SELECT c.id, u.name, c.email, c.username, c.password_hash, c.status,
@@ -495,11 +487,11 @@ export function registerPublicAuthRoutes(app, deps) {
        FROM ${center} c
        JOIN users u ON u.id = c.id
        WHERE c.username = ?`,
-      [username],
+      [loginId],
     );
     const user = rows[0];
     if (!user || !(await bcrypt.compare(password, user.password_hash))) {
-      return res.status(401).json({ message: "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" });
+      return res.status(401).json({ message: "รหัสพนักงานหรือรหัสผ่านไม่ถูกต้อง" });
     }
     // Early-stage: email verification is not required. Allow pending (legacy) accounts;
     // only suspended accounts are blocked here. Active company membership is still required.
@@ -569,6 +561,10 @@ export function registerPublicAuthRoutes(app, deps) {
     const lastName = req.body.lastName !== undefined
       ? String(req.body.lastName || "").trim()
       : undefined;
+    const emailProvided = Object.hasOwn(req.body, "email");
+    const normalizedEmail = emailProvided
+      ? String(req.body.email || "").trim().toLowerCase()
+      : undefined;
     const telegramProvided = Object.hasOwn(req.body, "telegramId");
     const normalizedTelegram = telegramProvided
       ? normalizeTelegramId(req.body.telegramId)
@@ -579,6 +575,21 @@ export function registerPublicAuthRoutes(app, deps) {
     }
     if (lastName !== undefined && !lastName) {
       return res.status(400).json({ message: "กรุณากรอกนามสกุล" });
+    }
+    if (emailProvided) {
+      if (!normalizedEmail) {
+        return res.status(400).json({ message: "กรุณากรอกอีเมล" });
+      }
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(normalizedEmail)) {
+        return res.status(400).json({ message: "รูปแบบอีเมลไม่ถูกต้อง" });
+      }
+      const [[takenEmail]] = await pool.execute(
+        `SELECT id FROM ${center} WHERE email = ? AND id <> ?`,
+        [normalizedEmail, req.user.id],
+      );
+      if (takenEmail) {
+        return res.status(409).json({ message: "อีเมลนี้ถูกใช้แล้ว" });
+      }
     }
     if (telegramProvided) {
       const badTelegram = telegramError(normalizedTelegram);
@@ -615,6 +626,12 @@ export function registerPublicAuthRoutes(app, deps) {
       const nextLast = lastName ?? req.user.lastName ?? "";
       fields.push("name = ?");
       values.push(`${nextFirst} ${nextLast}`.trim());
+    }
+    if (emailProvided) {
+      fields.push("email = ?");
+      values.push(normalizedEmail);
+      centerFields.push("email = ?");
+      centerValues.push(normalizedEmail);
     }
     if (telegramProvided) {
       fields.push("telegram_id = ?");

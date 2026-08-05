@@ -16,7 +16,7 @@ let foreignCompanyId;
 let foreignMembershipId;
 let registeredUserId;
 let registeredUserEmail;
-let registeredUsername;
+let registeredEmployeeCode;
 let developerVisibilityIssueId;
 let hierarchyTargetMembershipId;
 let hierarchyTargetOriginalRoleIds = [];
@@ -359,15 +359,14 @@ test("registration creates an active account without requiring email verificatio
   assert.ok(company?.id, "registration company fixture is missing");
   const suffix = randomUUID().replaceAll("-", "");
   registeredUserEmail = `registration-${suffix}@projecthub.local`;
-  registeredUsername = `user_${suffix.slice(0, 12)}`;
+  registeredEmployeeCode = String(Date.now()).slice(-8);
   const response = await fetch(`${baseUrl}/api/auth/register`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      employeeCode: String(Date.now()).slice(-8),
+      employeeCode: registeredEmployeeCode,
       firstName: "Integration",
       lastName: "Registration",
-      username: registeredUsername,
       email: registeredUserEmail,
       password: "Password123!",
       companyId: company.id,
@@ -377,11 +376,12 @@ test("registration creates an active account without requiring email verificatio
   const result = await response.json();
   registeredUserId = Number(result.id);
   const [[registeredUser]] = await pool.execute(
-    "SELECT status, email_verified_at FROM users WHERE id = ?",
+    "SELECT status, email_verified_at, username FROM users WHERE id = ?",
     [registeredUserId],
   );
   assert.equal(registeredUser.status, "active");
   assert.ok(registeredUser.email_verified_at);
+  assert.equal(registeredUser.username, registeredEmployeeCode);
   const [[emailEvent]] = await pool.execute(
     `SELECT id, status
      FROM outbox_events
@@ -419,7 +419,7 @@ test("membership approval unlocks login without a separate email verification st
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      username: registeredUsername,
+      employeeCode: registeredEmployeeCode,
       password: "Password123!",
     }),
   });
@@ -444,7 +444,7 @@ test("membership approval unlocks login without a separate email verification st
 });
 
 test("developers see all tickets but unrelated assigned tickets are read-only", { skip: !enabled }, async () => {
-  const requester = await login(registeredUsername);
+  const requester = await login(registeredEmployeeCode);
   const createResponse = await fetch(`${baseUrl}/api/issues`, {
     method: "POST",
     headers: {
@@ -542,7 +542,7 @@ test("company admins have full functional access but only manage lower roles", {
   );
   assert.equal(promoteResponse.status, 200);
 
-  const companyAdmin = await login(registeredUsername, { fresh: true });
+  const companyAdmin = await login(registeredEmployeeCode, { fresh: true });
   const [[{ permission_count: permissionCount }]] = await pool.execute(
     "SELECT COUNT(*) permission_count FROM permissions",
   );

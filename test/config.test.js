@@ -8,6 +8,9 @@ test("development config provides local-safe defaults", () => {
   assert.equal(config.db.database, "lfbsmart_project");
   assert.equal(config.db.connectionLimit, 30);
   assert.equal(config.production, false);
+  assert.equal(config.smtp.host, "smtp.gmail.com");
+  assert.equal(config.smtp.port, 587);
+  assert.equal(config.smtp.configured, false);
 });
 
 test("production rejects weak or missing JWT secret", () => {
@@ -15,8 +18,9 @@ test("production rejects weak or missing JWT secret", () => {
     () => loadConfig({
       NODE_ENV: "production",
       JWT_SECRET: "short",
-      RESEND_API_KEY: "test",
-      EMAIL_FROM: "ProjectHub <noreply@projecthub.test>",
+      SMTP_USER: "noreply@gmail.com",
+      SMTP_PASS: "app-password",
+      EMAIL_FROM: "ProjectHub <noreply@gmail.com>",
     }),
     /JWT_SECRET/,
   );
@@ -27,23 +31,23 @@ test("production requires transactional email configuration", () => {
     () => loadConfig({
       NODE_ENV: "production",
       JWT_SECRET: "a".repeat(48),
-      EMAIL_FROM: "ProjectHub <noreply@projecthub.test>",
+      EMAIL_FROM: "ProjectHub <noreply@gmail.com>",
     }),
-    /RESEND_API_KEY/,
+    /SMTP_USER and SMTP_PASS/,
   );
 });
 
-test("production may omit Resend when ALLOW_MISSING_RESEND=1", () => {
+test("production may omit SMTP when ALLOW_MISSING_SMTP=1", () => {
   const config = loadConfig({
     NODE_ENV: "production",
     JWT_SECRET: "a".repeat(48),
     EMAIL_FROM: "ProjectHub <noreply@lfbsmart.com>",
     DB_PASSWORD: "secret",
-    ALLOW_MISSING_RESEND: "1",
+    ALLOW_MISSING_SMTP: "1",
     SEED_DEMO_DATA: "0",
   });
   assert.equal(config.production, true);
-  assert.equal(config.resendApiKey, "");
+  assert.equal(config.smtp.configured, false);
 });
 
 test("production rejects an empty database password", () => {
@@ -51,8 +55,9 @@ test("production rejects an empty database password", () => {
     () => loadConfig({
       NODE_ENV: "production",
       JWT_SECRET: "a".repeat(48),
-      RESEND_API_KEY: "resend-test",
-      EMAIL_FROM: "ProjectHub <noreply@projecthub.test>",
+      SMTP_USER: "noreply@gmail.com",
+      SMTP_PASS: "app-password",
+      EMAIL_FROM: "ProjectHub <noreply@gmail.com>",
     }),
     /DB_PASSWORD/,
   );
@@ -61,7 +66,7 @@ test("production rejects an empty database password", () => {
 test("numeric configuration rejects invalid pool sizes", () => {
   assert.throws(() => loadConfig({ DB_POOL_LIMIT: "0" }), /DB_POOL_LIMIT/);
   assert.throws(() => loadConfig({ DB_PORT: "invalid" }), /DB_PORT/);
-  assert.throws(() => loadConfig({ PORT: "65536" }), /PORT/);
+  assert.throws(() => loadConfig({ SMTP_PORT: "65536" }), /SMTP_PORT/);
 });
 
 test("configuration rejects ambiguous environments and malformed endpoints", () => {
@@ -86,8 +91,9 @@ test("production never permits demo credential seeding", () => {
     () => loadConfig({
       NODE_ENV: "production",
       JWT_SECRET: "a".repeat(48),
-      RESEND_API_KEY: "resend-test",
-      EMAIL_FROM: "ProjectHub <noreply@projecthub.test>",
+      SMTP_USER: "noreply@gmail.com",
+      SMTP_PASS: "app-password",
+      EMAIL_FROM: "ProjectHub <noreply@gmail.com>",
       DB_PASSWORD: "strong-database-password",
       SEED_DEMO_DATA: "1",
     }),

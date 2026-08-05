@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { timeoutSignal } from "../core/node16-compat.js";
+import nodemailer from "nodemailer";
 
 export function createOneTimeToken() {
   const token = randomBytes(32).toString("hex");
@@ -7,22 +7,33 @@ export function createOneTimeToken() {
 }
 
 export function createEmailService({ config, emailFrom, logger }) {
+  const smtp = config.smtp;
+  const transporter = smtp?.user && smtp?.pass
+    ? nodemailer.createTransport({
+      host: smtp.host,
+      port: smtp.port,
+      secure: smtp.secure,
+      auth: {
+        user: smtp.user,
+        pass: smtp.pass,
+      },
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 15_000,
+    })
+    : null;
+
   return async function sendEmail({ to, subject, html, text, developmentUrl }) {
-    if (!config.resendApiKey) {
+    if (!transporter) {
       logger.info("email.development_link", { to, subject, developmentUrl });
       return;
     }
-    const response = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      signal: timeoutSignal(10_000),
-      headers: {
-        Authorization: `Bearer ${config.resendApiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ from: emailFrom, to: [to], subject, html, text }),
+    await transporter.sendMail({
+      from: emailFrom,
+      to,
+      subject,
+      html,
+      text,
     });
-    if (!response.ok) {
-      throw new Error(`Resend rejected email (${response.status})`);
-    }
   };
 }
